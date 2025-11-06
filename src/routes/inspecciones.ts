@@ -1,7 +1,7 @@
 import { Elysia } from 'elysia';
 import { authenticateToken } from '../middleware/auth.js';
 import type { ApiResponse, InspeccionSanitaria, Colmena } from '../types/apicola.js';
-import prisma from '../prisma/client';
+import prisma from '../prisma/client.js';
 import { AlertService } from '../services/alertService.js';
 
 const inspeccionesRoutes = new Elysia({ prefix: '/inspecciones' });

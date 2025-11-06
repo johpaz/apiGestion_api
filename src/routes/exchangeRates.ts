@@ -2,7 +2,7 @@ import { Elysia } from 'elysia';
 import { z } from 'zod';
 import { authenticateToken } from '../middleware/auth.js';
 import type { ApiResponse } from '../types/apicola.js';
-import prisma from '../prisma/client';
+import prisma from '../prisma/client.js';
 import { Moneda } from '../generated/prisma/enums.js';
 
 // Zod schemas for validation
