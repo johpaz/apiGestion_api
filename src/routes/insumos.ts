@@ -3,7 +3,7 @@ import { authenticateToken } from '../middleware/auth';
 import { ApiResponse, InsumoApicola } from '../types/apicola';
 import { InsumoApicola as PrismaInsumoApicola } from '../generated/prisma/client';
 import prisma from '../prisma/client';
-import { CategoriaInsumo, EstadoStock } from '../generated/prisma/client';
+import { CategoriaInsumo, EstadoStock } from '../generated/prisma/enums';
 import { z } from 'zod';
 
 // Esquemas de validación con Zod

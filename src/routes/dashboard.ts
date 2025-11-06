@@ -1,7 +1,7 @@
 import { Elysia } from 'elysia';
 import { authenticateToken } from '../middleware/auth';
 import { ApiResponse, RegistroFinanciero, Moneda } from '../types/apicola';
-import { Transaccion, Inspeccion, Usuario, Colmena, Enjambre, Nucleo, InsumoApicola, Produccion, Producto, Apiario } from '../generated/prisma/client';
+import { Transaccion, Inspeccion, Usuario, Colmena, Enjambre, Nucleo, InsumoApicola, Produccion, Producto, Apiario, Actividad } from '../generated/prisma/client';
 import prisma from '../prisma/client';
 import { CurrencyService } from '../services/currencyService';
 
@@ -232,7 +232,7 @@ dashboardRoutes.get('/activities', async ({ headers }) => {
       });
 
       // Format activities for frontend
-      const formattedActivities = activities.map(activity => ({
+      const formattedActivities = activities.map((activity) => ({
         id: activity.id,
         tipo: activity.tipo,
         titulo: activity.titulo,
