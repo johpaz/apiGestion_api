@@ -5,22 +5,22 @@ import logger from './utils/logger.js';
 import { errorHandler } from './middleware/errorHandler.js';
 
 // Import routes
-import authRoutes from './routes/auth';
-import apiariosRoutes from './routes/apiarios';
-import colmenasRoutes from './routes/colmenas';
-import inspeccionesRoutes from './routes/inspecciones';
-import enjambresRoutes from './routes/enjambres';
-import nucleosRoutes from './routes/nucleos';
-import produccionRoutes from './routes/produccion';
-import finanzasRoutes from './routes/finanzas';
-import usuariosRoutes from './routes/usuarios';
-import dashboardRoutes from './routes/dashboard';
-import alertasRoutes from './routes/alertas';
-import insumosRoutes from './routes/insumos';
-import exchangeRatesRoutes from './routes/exchangeRates';
-import reportesRoutes from './routes/reportes';
-import prisma from './prisma/client';
-import { schedulerService } from './services/schedulerService';
+import authRoutes from './routes/auth.js';
+import apiariosRoutes from './routes/apiarios.js';
+import colmenasRoutes from './routes/colmenas.js';
+import inspeccionesRoutes from './routes/inspecciones.js';
+import enjambresRoutes from './routes/enjambres.js';
+import nucleosRoutes from './routes/nucleos.js';
+import produccionRoutes from './routes/produccion.js';
+import finanzasRoutes from './routes/finanzas.js';
+import usuariosRoutes from './routes/usuarios.js';
+import dashboardRoutes from './routes/dashboard.js';
+import alertasRoutes from './routes/alertas.js';
+import insumosRoutes from './routes/insumos.js';
+import exchangeRatesRoutes from './routes/exchangeRates.js';
+import reportesRoutes from './routes/reportes.js';
+import prisma from './prisma/client.js';
+import { schedulerService } from './services/schedulerService.js';
 
 const PORT = process.env.PORT || 3001;
 const apiVersion = process.env.API_VERSION || 'v1';
