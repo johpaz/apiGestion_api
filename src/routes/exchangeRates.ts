@@ -1,9 +1,9 @@
 import { Elysia } from 'elysia';
 import { z } from 'zod';
-import { authenticateToken } from '../middleware/auth';
-import type { ApiResponse } from '../types/apicola';
+import { authenticateToken } from '../middleware/auth.js';
+import type { ApiResponse } from '../types/apicola.js';
 import prisma from '../prisma/client';
-import { Moneda } from '../generated/prisma/enums';
+import { Moneda } from '../generated/prisma/enums.js';
 
 // Zod schemas for validation
 const updateRateSchema = z.object({

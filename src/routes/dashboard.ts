@@ -1,10 +1,10 @@
 import { Elysia } from 'elysia';
-import { authenticateToken } from '../middleware/auth';
-import type { ApiResponse, RegistroFinanciero } from '../types/apicola';
-import { Moneda } from '../types/apicola';
+import { authenticateToken } from '../middleware/auth.js';
+import type { ApiResponse, RegistroFinanciero } from '../types/apicola.js';
+import { Moneda } from '../types/apicola.js';
 import type { Transaccion, Inspeccion, Usuario, Colmena, Enjambre, Nucleo, InsumoApicola, Produccion, Producto, Apiario, Actividad } from '../generated/prisma/client';
 import prisma from '../prisma/client';
-import { CurrencyService } from '../services/currencyService';
+import { CurrencyService } from '../services/currencyService.js';
 
 const dashboardRoutes = new Elysia({ prefix: '/dashboard' });
 

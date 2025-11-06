@@ -1,8 +1,8 @@
 import { Elysia } from 'elysia';
-import { authGuard } from '../middleware/auth';
-import type { ApiResponse, Nucleo } from '../types/apicola';
+import { authGuard } from '../middleware/auth.js';
+import type { ApiResponse, Nucleo } from '../types/apicola.js';
 import prisma from '../prisma/client';
-import { AlertService } from '../services/alertService';
+import { AlertService } from '../services/alertService.js';
 
 const nucleosRoutes = new Elysia({ prefix: '/nucleos' })
   .use(authGuard);

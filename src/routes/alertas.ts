@@ -1,10 +1,10 @@
 import { Elysia } from 'elysia';
 import { z } from 'zod';
-import { authenticateToken } from '../middleware/auth';
-import type { ApiResponse } from '../types/apicola';
-import { AlertService } from '../services/alertService';
-import type { CreateAlertData } from '../services/alertService';
-import { TipoAlerta, PrioridadAlerta } from '../generated/prisma/enums';
+import { authenticateToken } from '../middleware/auth.js';
+import type { ApiResponse } from '../types/apicola.js';
+import { AlertService } from '../services/alertService.js';
+import type { CreateAlertData } from '../services/alertService.js';
+import { TipoAlerta, PrioridadAlerta } from '../generated/prisma/enums.js';
 
 // Zod schemas for validation
 const createAlertSchema = z.object({

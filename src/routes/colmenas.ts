@@ -1,8 +1,8 @@
 import { Elysia } from 'elysia';
-import { authenticateToken } from '../middleware/auth';
-import type { ApiResponse, Colmena } from '../types/apicola';
+import { authenticateToken } from '../middleware/auth.js';
+import type { ApiResponse, Colmena } from '../types/apicola.js';
 import prisma from '../prisma/client';
-import { AlertService } from '../services/alertService';
+import { AlertService } from '../services/alertService.js';
 
 const colmenasRoutes = new Elysia({ prefix: '/colmenas' });
 

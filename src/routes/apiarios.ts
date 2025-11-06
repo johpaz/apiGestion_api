@@ -1,7 +1,7 @@
 import { Elysia } from 'elysia';
 import { z } from 'zod';
-import { authenticateToken } from '../middleware/auth';
-import type { ApiResponse, Apiario } from '../types/apicola';
+import { authenticateToken } from '../middleware/auth.js';
+import type { ApiResponse, Apiario } from '../types/apicola.js';
 import prisma from '../prisma/client';
 
 // Zod schemas for validation

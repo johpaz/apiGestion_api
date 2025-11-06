@@ -1,6 +1,6 @@
 import { Elysia } from 'elysia';
-import { authGuard } from '../middleware/auth';
-import type { ApiResponse } from '../types/apicola';
+import { authGuard } from '../middleware/auth.js';
+import type { ApiResponse } from '../types/apicola.js';
 import prisma from '../prisma/client';
 
 const reportesRoutes = new Elysia({ prefix: '/reportes' })
