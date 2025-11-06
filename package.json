@@ -23,7 +23,6 @@
   "dependencies": {
     "@elysiajs/cors": "1.4.0",
     "@elysiajs/jwt": "1.4.0",
-    "jose": "6.1.0",
     "@prisma/client": "6.19.0",
     "@prisma/config": "6.19.0",
     "@sinclair/typebox": "^0.34.41",
