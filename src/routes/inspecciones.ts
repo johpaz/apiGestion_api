@@ -1,6 +1,6 @@
 import { Elysia } from 'elysia';
 import { authenticateToken } from '../middleware/auth';
-import { ApiResponse, InspeccionSanitaria } from '../types/apicola';
+import { ApiResponse, InspeccionSanitaria, Colmena } from '../types/apicola';
 import prisma from '../prisma/client';
 import { AlertService } from '../services/alertService';
 
@@ -129,7 +129,7 @@ inspeccionesRoutes.post('/', async ({ body, headers }) => {
         ? await prisma.colmena.findUnique({
             where: { id: inspeccionData.colmenaIds[0] },
             select: { nombre: true }
-          }).then(c => c?.nombre || 'Colmena')
+          }).then((c: { nombre: string } | null) => c?.nombre || 'Colmena')
         : 'Colmena';
 
       await prisma.actividad.create({

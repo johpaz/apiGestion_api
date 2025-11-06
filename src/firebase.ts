@@ -1,5 +1,3 @@
-import dotenv from 'dotenv';
-import { createRequire } from 'module';
 import firebase from 'firebase-admin';
 import logger from './utils/logger';
 // Use Node.js require to import firebase-admin to handle Bun compatibility issues
