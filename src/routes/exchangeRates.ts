@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { authenticateToken } from '../middleware/auth';
 import { ApiResponse } from '../types/apicola';
 import prisma from '../prisma/client';
-import { Moneda } from '../generated/prisma/enums';
+import { Moneda } from '../generated/prisma/client';
 
 // Zod schemas for validation
 const updateRateSchema = z.object({

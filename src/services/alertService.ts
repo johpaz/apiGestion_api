@@ -1,5 +1,5 @@
 import prisma from '../prisma/client';
-import { TipoAlerta, PrioridadAlerta } from '../generated/prisma/enums';
+import { TipoAlerta, PrioridadAlerta } from '../generated/prisma/client';
 import { emailService } from './emailService';
 import { AlertEmailTemplate } from '../templates/email/alertTemplate';
 
