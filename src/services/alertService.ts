@@ -1,7 +1,7 @@
 import prisma from '../prisma/client.js';
 import { TipoAlerta, PrioridadAlerta } from '../generated/prisma/enums.js';
 import { emailService } from './emailService.js';
-import { AlertEmailTemplate } from '../templates/email/alertTemplate';
+import { AlertEmailTemplate } from '../templates/email/alertTemplate.js';
 
 export interface CreateAlertData {
   titulo: string;
