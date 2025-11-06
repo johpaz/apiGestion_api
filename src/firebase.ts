@@ -1,5 +1,5 @@
 import firebase from 'firebase-admin';
-import logger from './utils/logger';
+import logger from './utils/logger.js';
 // Use Node.js require to import firebase-admin to handle Bun compatibility issues
 
 const requiredVars = [
