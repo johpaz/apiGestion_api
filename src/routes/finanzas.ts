@@ -1,8 +1,23 @@
 import { Elysia } from 'elysia';
 import { authGuard } from '../middleware/auth';
 import { ApiResponse, RegistroFinanciero } from '../types/apicola';
-import type { Transaccion } from '../generated/prisma/client';
+import type { Transaccion, TipoTransaccion } from '../generated/prisma/client';
 import prisma from '../prisma/client';
+
+interface TransaccionInput {
+  tipo: TipoTransaccion;
+  descripcion: string;
+  monto: number;
+  fecha?: string;
+  categoria?: string;
+  referencia?: string;
+}
+
+interface MonthlyRow {
+  mes: string;
+  ingresos: string;
+  egresos: string;
+}
 
 const finanzasRoutes = new Elysia({ prefix: '/finanzas' })
   .use(authGuard);
@@ -47,11 +62,11 @@ finanzasRoutes.get('/resumen', async (context: any) => {
 
     const ingresos = transacciones
       .filter((t: Transaccion) => t.tipo === 'ingreso')
-      .reduce((sum, t: Transaccion) => sum + t.monto, 0);
+      .reduce((sum: number, t: Transaccion) => sum + t.monto, 0);
 
     const egresos = transacciones
       .filter((t: Transaccion) => t.tipo === 'egreso')
-      .reduce((sum, t: Transaccion) => sum + t.monto, 0);
+      .reduce((sum: number, t: Transaccion) => sum + t.monto, 0);
 
     const balance = ingresos - egresos;
 
@@ -99,7 +114,7 @@ finanzasRoutes.get('/mensual', async (context: any) => {
     }));
 
     // Fill in the data from query results
-    (monthlyData as any[]).forEach((row: any) => {
+    (monthlyData as MonthlyRow[]).forEach((row: MonthlyRow) => {
       const mesIndex = parseInt(row.mes) - 1;
       monthlySummary[mesIndex].ingresos = parseFloat(row.ingresos) || 0;
       monthlySummary[mesIndex].egresos = parseFloat(row.egresos) || 0;
@@ -121,7 +136,7 @@ finanzasRoutes.get('/mensual', async (context: any) => {
 finanzasRoutes.post('/', async (context: any) => {
    try {
      const userId = context.user?.id;
-     const transaccionData = context.body;
+     const transaccionData: TransaccionInput = context.body;
 
      const newTransaccion = await prisma.transaccion.create({
        data: {
@@ -162,7 +177,7 @@ finanzasRoutes.put('/:id', async (context: any) => {
    try {
      const userId = context.user?.id;
      const id = context.params.id;
-     const transaccionData = context.body;
+     const transaccionData: TransaccionInput = context.body;
 
      const updatedTransaccion = await prisma.transaccion.update({
        where: {
