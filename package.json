@@ -2,12 +2,11 @@
   "name": "apigestion-api",
   "version": "1.0.0",
   "description": "API Backend para ApiGestión Pro - Plataforma de Gestión Apícola",
-  "main": "dist/server.js",
-  "type": "module",
+  "main": "dist/server.ts",
   "scripts": {
     "dev": "bun --hot src/server.ts",
     "build": "bun build --target bun --outfile dist/index.js src/server.ts",
-    "start": "bun dist/server.js",
+    "start": "bun dist/server.ts",
     "test": "bun test",
     "lint": "eslint src/**/*.ts",
     "postinstall": "prisma generate"
