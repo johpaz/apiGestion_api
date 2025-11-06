@@ -2,7 +2,6 @@
   "name": "apigestion-api",
   "version": "1.0.0",
   "description": "API Backend para ApiGestión Pro - Plataforma de Gestión Apícola",
-  "type": "module",
   "main": "dist/server.js",
   "scripts": {
     "dev": "bun --hot src/server.ts",
