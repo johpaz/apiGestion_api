@@ -1,6 +1,7 @@
 import { Elysia } from 'elysia';
 import { authGuard } from '../middleware/auth';
 import { ApiResponse, RegistroFinanciero } from '../types/apicola';
+import type { Transaccion } from '../generated/prisma/client';
 import prisma from '../prisma/client';
 
 const finanzasRoutes = new Elysia({ prefix: '/finanzas' })
@@ -16,7 +17,7 @@ finanzasRoutes.get('/', async (context: any) => {
 
     return {
       success: true,
-      data: transacciones.map(t => ({
+      data: transacciones.map((t: Transaccion) => ({
         id: t.id,
         fecha: t.fecha.toISOString(),
         tipo: t.tipo,
@@ -45,12 +46,12 @@ finanzasRoutes.get('/resumen', async (context: any) => {
     });
 
     const ingresos = transacciones
-      .filter(t => t.tipo === 'ingreso')
-      .reduce((sum, t) => sum + t.monto, 0);
+      .filter((t: Transaccion) => t.tipo === 'ingreso')
+      .reduce((sum, t: Transaccion) => sum + t.monto, 0);
 
     const egresos = transacciones
-      .filter(t => t.tipo === 'egreso')
-      .reduce((sum, t) => sum + t.monto, 0);
+      .filter((t: Transaccion) => t.tipo === 'egreso')
+      .reduce((sum, t: Transaccion) => sum + t.monto, 0);
 
     const balance = ingresos - egresos;
 
