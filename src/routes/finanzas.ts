@@ -1,9 +1,9 @@
 import { Elysia } from 'elysia';
-import { authGuard } from '../middleware/auth.js';
-import type { ApiResponse, RegistroFinanciero } from '../types/apicola.js';
+import { authGuard } from '../middleware/auth';
+import { ApiResponse, RegistroFinanciero } from '../types/apicola';
 import type { Transaccion } from '../generated/prisma/client';
 import { TipoTransaccion } from '../generated/prisma/enums';
-import prisma from '../prisma/client.js';
+import prisma from '../prisma/client';
 
 interface TransaccionInput {
   tipo: TipoTransaccion;
@@ -117,11 +117,9 @@ finanzasRoutes.get('/mensual', async (context: any) => {
     // Fill in the data from query results
     (monthlyData as MonthlyRow[]).forEach((row: MonthlyRow) => {
       const mesIndex = parseInt(row.mes) - 1;
-      if (mesIndex >= 0 && mesIndex < 12 && !isNaN(mesIndex)) {
-        monthlySummary[mesIndex]!.ingresos = parseFloat(row.ingresos) || 0;
-        monthlySummary[mesIndex]!.egresos = parseFloat(row.egresos) || 0;
-        monthlySummary[mesIndex]!.balance = monthlySummary[mesIndex]!.ingresos - monthlySummary[mesIndex]!.egresos;
-      }
+      monthlySummary[mesIndex].ingresos = parseFloat(row.ingresos) || 0;
+      monthlySummary[mesIndex].egresos = parseFloat(row.egresos) || 0;
+      monthlySummary[mesIndex].balance = monthlySummary[mesIndex].ingresos - monthlySummary[mesIndex].egresos;
     });
 
     return {

@@ -1,6 +1,6 @@
 import { Elysia } from 'elysia';
-import type { ApiResponse } from '../types/apicola.js';
-import logger from '../utils/logger.js';
+import { ApiResponse } from '../types/apicola';
+import logger from '../utils/logger';
 
 // Plugin de manejo de errores para Elysia
 export const errorHandler = new Elysia()

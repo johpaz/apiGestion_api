@@ -1,4 +1,4 @@
-import { AlertService } from './alertService.js';
+import { AlertService } from './alertService';
 
 export class SchedulerService {
   private static instance: SchedulerService;

@@ -1,5 +1,5 @@
 import { Elysia } from 'elysia';
-import type { ApiResponse } from '../types/apicola.js';
+import type { ApiResponse } from '../types/apicola';
 
 // Plugin para manejar rutas no encontradas
 export const notFoundHandler = new Elysia()

@@ -1,5 +1,5 @@
-import prisma from '../prisma/client.js';
-import { Moneda } from '../generated/prisma/enums.js';
+import prisma from '../prisma/client';
+import { Moneda } from '../generated/prisma/enums';
 
 export type Currency = 'COP' | 'EUR' | 'USD';
 

@@ -1,9 +1,9 @@
 import { Elysia } from 'elysia';
 import jwt from 'jsonwebtoken';
-import type { ApiResponse, Usuario } from '../types/apicola.js';
-import logger from '../utils/logger.js';
-import { auth as firebaseAuth } from '../firebase.js';
-import prisma from '../prisma/client.js';
+import { ApiResponse, Usuario } from '../types/apicola';
+import logger from '../utils/logger';
+import { auth as firebaseAuth } from '../firebase';
+import prisma from '../prisma/client';
 
 export interface AuthUser extends Omit<Usuario, 'password'> {}
 

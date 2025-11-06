@@ -1,7 +1,8 @@
 import { Elysia } from 'elysia';
-import { authGuard, requireRoleGuard } from '../middleware/auth.js';
-import type { ApiResponse, Usuario } from '../types/apicola.js';
-import prisma from '../prisma/client.js';
+import { authGuard, requireRoleGuard } from '../middleware/auth';
+import { ApiResponse, Usuario } from '../types/apicola';
+import { validateUpdateProfile } from '../middleware/validation';
+import prisma from '../prisma/client';
 
 const usuariosRoutes = new Elysia({ prefix: '/usuarios' })
   .use(authGuard);

@@ -1,6 +1,6 @@
-import type { Request, Response, NextFunction } from 'express';
+import { Request, Response, NextFunction } from 'express';
 import { body, validationResult } from 'express-validator';
-import type { ApiResponse } from '../types/apicola.js';
+import { ApiResponse } from '../types/apicola';
 
 export const handleValidationErrors = (req: Request, res: Response, next: NextFunction): void => {
   const errors = validationResult(req);

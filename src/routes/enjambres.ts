@@ -1,8 +1,8 @@
 import { Elysia } from 'elysia';
-import { authGuard } from '../middleware/auth.js';
-import type { ApiResponse, Enjambre } from '../types/apicola.js';
-import prisma from '../prisma/client.js';
-import { AlertService } from '../services/alertService.js';
+import { authGuard } from '../middleware/auth';
+import { ApiResponse, Enjambre } from '../types/apicola';
+import prisma from '../prisma/client';
+import { AlertService } from '../services/alertService';
 
 const enjambresRoutes = new Elysia({ prefix: '/enjambres' })
   .use(authGuard);

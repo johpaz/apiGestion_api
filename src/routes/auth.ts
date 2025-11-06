@@ -1,9 +1,9 @@
 import { Elysia } from 'elysia';
 import jwt from 'jsonwebtoken';
-import type { ApiResponse, AuthResponse, LoginRequest, RegisterRequest, Usuario } from '../types/apicola.js';
-import { auth as firebaseAuth } from '../firebase.js';
-import logger from '../utils/logger.js';
-import prisma from '../prisma/client.js';
+import { ApiResponse, AuthResponse, LoginRequest, RegisterRequest, Usuario } from '../types/apicola';
+import { auth as firebaseAuth } from '../firebase';
+import logger from '../utils/logger';
+import prisma from '../prisma/client';
 
 // Función para hashear contraseñas usando Bun.password
 async function hashPassword(password: string): Promise<string> {

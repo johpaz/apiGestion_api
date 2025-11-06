@@ -1,8 +1,8 @@
 import { Elysia, t } from 'elysia';
-import { authenticateToken } from '../middleware/auth.js';
-import type { ApiResponse, Produccion } from '../types/apicola.js';
-import prisma from '../prisma/client.js';
-import { TipoProducto } from '../generated/prisma/enums.js';
+import { authenticateToken } from '../middleware/auth';
+import { ApiResponse, Produccion } from '../types/apicola';
+import prisma from '../prisma/client';
+import { TipoProducto } from '../generated/prisma/enums';
 import { z } from 'zod';
 
 // Esquemas de validación con Zod
