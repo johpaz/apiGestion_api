@@ -18,7 +18,7 @@ import dashboardRoutes from './routes/dashboard';
 import alertasRoutes from './routes/alertas';
 import insumosRoutes from './routes/insumos';
 import exchangeRatesRoutes from './routes/exchangeRates';
-
+import reportesRoutes from './routes/reportes';
 import prisma from './prisma/client';
 import { schedulerService } from './services/schedulerService';
 
@@ -82,6 +82,7 @@ const app = new Elysia()
       .use(alertasRoutes)
       .use(insumosRoutes)
       .use(exchangeRatesRoutes)
+      .use(reportesRoutes)
   )
   .listen(PORT, () => {
     logger.info(`🐝 ApiGestión Pro API ejecutándose en puerto ${PORT}`);

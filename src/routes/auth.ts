@@ -54,7 +54,8 @@ authRoutes.post('/login', async ({ body }) => {
       email: user.email,
       rol: user.rol,
       nombre: user.nombre,
-      moneda: user.moneda
+      moneda: user.moneda,
+      exp: Math.floor(Date.now() / 1000) + (60 * 60 * 24)
     }, jwtSecret);
 
     // Update last access in database
@@ -122,7 +123,8 @@ authRoutes.post('/register', async ({ body }) => {
       email: newUser.email,
       rol: newUser.rol,
       nombre: newUser.nombre,
-      moneda: newUser.moneda
+      moneda: newUser.moneda,
+      exp: Math.floor(Date.now() / 1000) + (60 * 60 * 24)
     }, jwtSecret);
 
     const { password: _, ...userWithoutPassword } = newUser;
@@ -261,7 +263,8 @@ authRoutes.post('/google-callback', async ({ body, headers }) => {
       email: user.email,
       rol: user.rol,
       nombre: user.nombre,
-      moneda: user.moneda
+      moneda: user.moneda,
+      exp: Math.floor(Date.now() / 1000) + (60 * 60 * 24)
     }, jwtSecret);
     logger.info({ tokenGenerated: !!token, tokenLength: token.length }, 'JWT token generado exitosamente');
 

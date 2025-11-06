@@ -19,28 +19,15 @@ export interface Colmena {
    fechaInstalacion: Date;
    fechaCreacion: Date;
    fechaActualizacion: Date;
-  // Nuevos campos de inspección y producción
-  cuadros: number | null;
-  reyna: boolean | null;
-  posibleEnfermedad: string | null;
-  numAlzas: number | null;
-  numAlimentadas: number | null;
-  tipoAlimento: string | null;
-  introduccionCera: boolean | null;
-  divisionColmena: boolean | null;
-  cantidadZanganos: number | null;
-  valoracionColmena: string | null;
-  extraerMiel: boolean | null;
-  extraerPollen: boolean | null;
-  conCria: boolean | null;
-  miel: number | null;
-  ceraEstimada: number | null;
-  ceraSe: number | null;
-  // Campos para alertas recurrentes
-  alertasRecurrentesActivadas: boolean;
-  ultimaAlertaControl: Date | null;
-  usuarioId: string;
-  apiarioId: string;
+   cuadros: number | null;
+   reyna: boolean | null;
+   tipoReyna: string | null;
+   fechaReyna: Date | null;
+   // Campos para alertas recurrentes
+   alertasRecurrentesActivadas: boolean;
+   ultimaAlertaControl: Date | null;
+   usuarioId: string;
+   apiarioId: string;
 }
 
 export interface InspeccionSanitaria {

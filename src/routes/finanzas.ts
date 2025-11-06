@@ -72,6 +72,50 @@ finanzasRoutes.get('/resumen', async (context: any) => {
   }
 });
 
+// Get monthly financial summary for current year
+finanzasRoutes.get('/mensual', async (context: any) => {
+  try {
+    const userId = context.user?.id;
+    const currentYear = new Date().getFullYear();
+
+    const monthlyData = await prisma.$queryRaw`
+      SELECT
+        EXTRACT(MONTH FROM fecha) as mes,
+        SUM(CASE WHEN tipo = 'ingreso' THEN monto ELSE 0 END) as ingresos,
+        SUM(CASE WHEN tipo = 'egreso' THEN monto ELSE 0 END) as egresos
+      FROM transacciones
+      WHERE "usuarioId" = ${userId} AND EXTRACT(YEAR FROM fecha) = ${currentYear}
+      GROUP BY EXTRACT(MONTH FROM fecha)
+      ORDER BY mes
+    `;
+
+    // Initialize array with 12 months, all with 0 values
+    const monthlySummary = Array.from({ length: 12 }, (_, i) => ({
+      mes: i + 1,
+      ingresos: 0,
+      egresos: 0,
+      balance: 0
+    }));
+
+    // Fill in the data from query results
+    (monthlyData as any[]).forEach((row: any) => {
+      const mesIndex = parseInt(row.mes) - 1;
+      monthlySummary[mesIndex].ingresos = parseFloat(row.ingresos) || 0;
+      monthlySummary[mesIndex].egresos = parseFloat(row.egresos) || 0;
+      monthlySummary[mesIndex].balance = monthlySummary[mesIndex].ingresos - monthlySummary[mesIndex].egresos;
+    });
+
+    return {
+      success: true,
+      data: monthlySummary,
+      message: 'Resumen financiero mensual obtenido exitosamente'
+    } as ApiResponse;
+  } catch (error: any) {
+    console.error('Get monthly financial summary error:', error);
+    throw new Error('Error interno del servidor');
+  }
+});
+
 // Create new financial record
 finanzasRoutes.post('/', async (context: any) => {
    try {
