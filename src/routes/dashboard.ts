@@ -1,7 +1,8 @@
 import { Elysia } from 'elysia';
 import { authenticateToken } from '../middleware/auth';
-import { ApiResponse, RegistroFinanciero, Moneda } from '../types/apicola';
-import { Transaccion, Inspeccion, Usuario, Colmena, Enjambre, Nucleo, InsumoApicola, Produccion, Producto, Apiario, Actividad } from '../generated/prisma/client';
+import type { ApiResponse, RegistroFinanciero } from '../types/apicola';
+import { Moneda } from '../types/apicola';
+import type { Transaccion, Inspeccion, Usuario, Colmena, Enjambre, Nucleo, InsumoApicola, Produccion, Producto, Apiario, Actividad } from '../generated/prisma/client';
 import prisma from '../prisma/client';
 import { CurrencyService } from '../services/currencyService';
 

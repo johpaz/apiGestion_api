@@ -1,6 +1,6 @@
 import { Elysia } from 'elysia';
 import { authGuard } from '../middleware/auth';
-import { ApiResponse, Nucleo } from '../types/apicola';
+import type { ApiResponse, Nucleo } from '../types/apicola';
 import prisma from '../prisma/client';
 import { AlertService } from '../services/alertService';
 

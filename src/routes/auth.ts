@@ -1,6 +1,6 @@
 import { Elysia } from 'elysia';
 import jwt from 'jsonwebtoken';
-import { ApiResponse, AuthResponse, LoginRequest, RegisterRequest, Usuario } from '../types/apicola';
+import type { ApiResponse, AuthResponse, LoginRequest, RegisterRequest, Usuario } from '../types/apicola';
 import { auth as firebaseAuth } from '../firebase';
 import logger from '../utils/logger';
 import prisma from '../prisma/client';

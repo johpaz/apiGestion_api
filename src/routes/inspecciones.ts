@@ -1,6 +1,6 @@
 import { Elysia } from 'elysia';
 import { authenticateToken } from '../middleware/auth';
-import { ApiResponse, InspeccionSanitaria, Colmena } from '../types/apicola';
+import type { ApiResponse, InspeccionSanitaria, Colmena } from '../types/apicola';
 import prisma from '../prisma/client';
 import { AlertService } from '../services/alertService';
 

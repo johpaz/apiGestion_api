@@ -1,5 +1,5 @@
 import { Elysia } from 'elysia';
-import { ApiResponse } from '../types/apicola';
+import type { ApiResponse } from '../types/apicola';
 import logger from '../utils/logger';
 
 // Plugin de manejo de errores para Elysia

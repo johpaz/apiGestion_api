@@ -1,7 +1,7 @@
 import { Elysia, t } from 'elysia';
 import { authenticateToken } from '../middleware/auth';
-import { ApiResponse, InsumoApicola } from '../types/apicola';
-import { InsumoApicola as PrismaInsumoApicola } from '../generated/prisma/client';
+import type { ApiResponse, InsumoApicola } from '../types/apicola';
+import type { InsumoApicola as PrismaInsumoApicola } from '../generated/prisma/client';
 import prisma from '../prisma/client';
 import { CategoriaInsumo, EstadoStock } from '../generated/prisma/enums';
 import { z } from 'zod';
