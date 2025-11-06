@@ -2,7 +2,7 @@ import { Elysia } from 'elysia';
 import { authenticateToken } from '../middleware/auth.js';
 import type { ApiResponse, RegistroFinanciero } from '../types/apicola.js';
 import { Moneda } from '../types/apicola.js';
-import type { Transaccion, Inspeccion, Usuario, Colmena, Enjambre, Nucleo, InsumoApicola, Produccion, Producto, Apiario, Actividad } from '../generated/prisma/client';
+import type { Transaccion, Inspeccion, Usuario, Colmena, Enjambre, Nucleo, InsumoApicola, Produccion, Producto, Apiario, Actividad } from '../generated/prisma/client.js';
 import prisma from '../prisma/client.js';
 import { CurrencyService } from '../services/currencyService.js';
 
