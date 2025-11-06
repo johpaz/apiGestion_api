@@ -1,5 +1,5 @@
 import { Elysia } from 'elysia';
-import { authGuard } from '../middleware/auth';
+import { authGuard } from '../middleware/auth.js';
 import type { ApiResponse, RegistroFinanciero } from '../types/apicola.js';
 import type { Transaccion } from '../generated/prisma/client.js';
 import { TipoTransaccion } from '../generated/prisma/enums.js';
