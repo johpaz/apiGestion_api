@@ -1,6 +1,7 @@
 import { Elysia } from 'elysia';
 import { authenticateToken } from '../middleware/auth';
-import { ApiResponse } from '../types/apicola';
+import { ApiResponse, RegistroFinanciero, Moneda } from '../types/apicola';
+import { Transaccion, Inspeccion, Usuario, Colmena, Enjambre, Nucleo, InsumoApicola, Produccion, Producto, Apiario } from '../generated/prisma/client';
 import prisma from '../prisma/client';
 import { CurrencyService } from '../services/currencyService';
 
@@ -29,33 +30,33 @@ dashboardRoutes.get('/stats', async ({ headers }) => {
     ]);
 
     // Get user's currency preference and role (default to COP if not set)
-    const userCurrency = userData?.moneda || 'COP';
+    const userCurrency: Moneda = (userData?.moneda as Moneda) || Moneda.COP;
     const userRole = userData?.rol || 'apicultor';
     console.log('🔍 DEBUG API: User currency:', userCurrency, 'Role:', userRole);
 
     // Calculate statistics
-    const colmenasActivas = colmenas.filter(c => c.estado === 'activa').length;
-    const colmenasInactivas = colmenas.filter(c => c.estado === 'inactiva').length;
+    const colmenasActivas = colmenas.filter((c: Colmena) => c.estado === 'activa').length;
+    const colmenasInactivas = colmenas.filter((c: Colmena) => c.estado === 'inactiva').length;
 
-    const produccionTotal = productos.reduce((sum, p) => sum + p.cantidad, 0);
+    const produccionTotal = productos.reduce((sum: number, p: Producto) => sum + p.cantidad, 0);
 
     const ingresos = transacciones
-      .filter(t => t.tipo === 'ingreso')
-      .reduce((sum, t) => sum + t.monto, 0);
+      .filter((t: Transaccion) => t.tipo === 'ingreso')
+      .reduce((sum: number, t: Transaccion) => sum + t.monto, 0);
 
     const egresos = transacciones
-      .filter(t => t.tipo === 'egreso')
-      .reduce((sum, t) => sum + t.monto, 0);
+      .filter((t: Transaccion) => t.tipo === 'egreso')
+      .reduce((sum: number, t: Transaccion) => sum + t.monto, 0);
 
     // Convert financial values to user's currency (from COP base)
-    const ingresosConversion = await CurrencyService.convert(ingresos, 'COP', userCurrency as any);
-    const egresosConversion = await CurrencyService.convert(egresos, 'COP', userCurrency as any);
+    const ingresosConversion = await CurrencyService.convert(ingresos, 'COP', userCurrency);
+    const egresosConversion = await CurrencyService.convert(egresos, 'COP', userCurrency);
     const ingresosConvertidos = ingresosConversion.convertedAmount;
     const egresosConvertidos = egresosConversion.convertedAmount;
     const balanceConvertido = ingresosConvertidos - egresosConvertidos;
 
     // Recent inspections with issues
-    const inspeccionesConProblemas = inspecciones.filter(i =>
+    const inspeccionesConProblemas = inspecciones.filter((i: Inspeccion) =>
       i.estadoSanidad === 'enferma' || i.estadoSanidad === 'cuarentena'
     ).length;
 
@@ -63,45 +64,45 @@ dashboardRoutes.get('/stats', async ({ headers }) => {
     const inspeccionesPendientes = Math.max(0, colmenasActivas - inspecciones.length);
 
     // Calculate enjambres statistics
-    const enjambresActivos = enjambres.filter(e => e.estado === 'activo').length;
-    const enjambresInactivos = enjambres.filter(e => e.estado === 'inactivo').length;
-    const enjambresDivididos = enjambres.filter(e => e.estado === 'dividido').length;
-    const enjambresFusionados = enjambres.filter(e => e.estado === 'fusionado').length;
+    const enjambresActivos = enjambres.filter((e: Enjambre) => e.estado === 'activo').length;
+    const enjambresInactivos = enjambres.filter((e: Enjambre) => e.estado === 'inactivo').length;
+    const enjambresDivididos = enjambres.filter((e: Enjambre) => e.estado === 'dividido').length;
+    const enjambresFusionados = enjambres.filter((e: Enjambre) => e.estado === 'fusionado').length;
 
     // Calculate nucleos statistics
     const nucleosTotal = nucleos.length;
-    const nucleosPorEstado = nucleos.reduce((acc, n) => {
+    const nucleosPorEstado = nucleos.reduce((acc: Record<string, number>, n: Nucleo) => {
       acc[n.estado] = (acc[n.estado] || 0) + 1;
       return acc;
     }, {} as Record<string, number>);
-    const nucleosPorTipo = nucleos.reduce((acc, n) => {
+    const nucleosPorTipo = nucleos.reduce((acc: Record<string, number>, n: Nucleo) => {
       acc[n.tipo] = (acc[n.tipo] || 0) + 1;
       return acc;
     }, {} as Record<string, number>);
 
     // Calculate insumos statistics
     const insumosTotal = insumos.length;
-    const insumosPorCategoria = insumos.reduce((acc, i) => {
+    const insumosPorCategoria = insumos.reduce((acc: Record<string, number>, i: InsumoApicola) => {
       acc[i.categoria] = (acc[i.categoria] || 0) + 1;
       return acc;
     }, {} as Record<string, number>);
-    const insumosStockBajo = insumos.filter(i => i.cantidadActual < i.cantidadMinima).length;
-    const insumosAgotados = insumos.filter(i => i.cantidadActual <= 0).length;
-    const insumosStockBueno = insumos.filter(i => i.cantidadActual >= i.cantidadMinima).length;
+    const insumosStockBajo = insumos.filter((i: InsumoApicola) => i.cantidadActual < i.cantidadMinima).length;
+    const insumosAgotados = insumos.filter((i: InsumoApicola) => i.cantidadActual <= 0).length;
+    const insumosStockBueno = insumos.filter((i: InsumoApicola) => i.cantidadActual >= i.cantidadMinima).length;
 
     // Calculate apiarios statistics
     const apiariosTotal = apiarios.length;
     // Note: Apiario model doesn't have 'estado' field, so all are considered active
     const apiariosActivos = apiarios.length;
     const apiariosInactivos = 0;
-    const apiariosPorUbicacion = apiarios.reduce((acc, a) => {
+    const apiariosPorUbicacion = apiarios.reduce((acc: Record<string, number>, a: Apiario) => {
       const ubicacion = `${a.ciudad}, ${a.pais}`;
       acc[ubicacion] = (acc[ubicacion] || 0) + 1;
       return acc;
     }, {} as Record<string, number>);
 
     // Calculate monthly production data
-    const produccionMensual = productos.reduce((acc, p) => {
+    const produccionMensual = productos.reduce((acc: Record<string, number>, p: Producto) => {
       const fechaProduccion = p.fechaProduccion || new Date();
       const mes = new Date(fechaProduccion).toISOString().slice(0, 7); // YYYY-MM format
       acc[mes] = (acc[mes] || 0) + p.cantidad;
@@ -109,7 +110,7 @@ dashboardRoutes.get('/stats', async ({ headers }) => {
     }, {} as Record<string, number>);
 
     // Calculate production by type from producciones table
-    const produccionPorTipo = producciones.reduce((acc, p) => {
+    const produccionPorTipo = producciones.reduce((acc: Record<string, number>, p: Produccion) => {
       const tipo = p.tipoProducto;
       acc[tipo] = (acc[tipo] || 0) + p.cantidad;
       return acc;
@@ -132,11 +133,11 @@ dashboardRoutes.get('/stats', async ({ headers }) => {
     }
 
     // Calculate users statistics (only for administrators)
-    let usuariosStats = null;
+    let usuariosStats: { total: number; activos: number; porRol: Record<string, number> } | null = null;
     if (userRole === 'administrador') {
       const usuarios = await prisma.usuario.findMany();
-      const usuariosActivos = usuarios.filter(u => u.activo).length;
-      const usuariosPorRol = usuarios.reduce((acc, u) => {
+      const usuariosActivos = usuarios.filter((u: Usuario) => u.activo).length;
+      const usuariosPorRol = usuarios.reduce((acc: Record<string, number>, u: Usuario) => {
         acc[u.rol] = (acc[u.rol] || 0) + 1;
         return acc;
       }, {} as Record<string, number>);
@@ -205,9 +206,9 @@ dashboardRoutes.get('/stats', async ({ headers }) => {
       data: stats,
       message: 'Estadísticas del dashboard obtenidas exitosamente'
     } as ApiResponse;
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('❌ ERROR API: Get dashboard stats error:', error);
-    console.error('❌ ERROR API: Stack trace:', error.stack);
+    console.error('❌ ERROR API: Stack trace:', error instanceof Error ? error.stack : error);
     throw new Error('Error interno del servidor');
   }
 });
@@ -247,9 +248,9 @@ dashboardRoutes.get('/activities', async ({ headers }) => {
         data: formattedActivities,
         message: 'Actividades recientes obtenidas exitosamente'
       } as ApiResponse;
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('❌ ERROR API: Get recent activities error:', error);
-      console.error('❌ ERROR API: Stack trace:', error.stack);
+      console.error('❌ ERROR API: Stack trace:', error instanceof Error ? error.stack : error);
       throw new Error('Error interno del servidor');
     }
   });
