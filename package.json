@@ -8,7 +8,8 @@
     "build": "tsc",
     "start": "bun dist/server.js",
     "test": "bun test",
-    "lint": "eslint src/**/*.ts"
+    "lint": "eslint src/**/*.ts",
+    "postinstall": "prisma generate"
   },
   "keywords": [
     "apicultura",
