@@ -175,7 +175,7 @@ export class CurrencyService {
       const rates: Record<string, number> = {};
 
       // Agregar tasas desde DB
-      dbRates.forEach(rate => {
+      dbRates.forEach((rate: { fromCurrency: Moneda; toCurrency: Moneda; rate: number }) => {
         rates[`${rate.fromCurrency}_${rate.toCurrency}`] = rate.rate;
       });
 

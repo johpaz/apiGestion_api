@@ -1,6 +1,7 @@
 import { Elysia, t } from 'elysia';
 import { authenticateToken } from '../middleware/auth';
 import { ApiResponse, InsumoApicola } from '../types/apicola';
+import { InsumoApicola as PrismaInsumoApicola } from '../generated/prisma/client';
 import prisma from '../prisma/client';
 import { CategoriaInsumo, EstadoStock } from '../generated/prisma/enums';
 import { z } from 'zod';
@@ -78,7 +79,7 @@ insumosRoutes.get('/', async ({ headers, query }) => {
     ]);
 
     // Calcular porcentaje de stock para cada insumo
-    const insumosConPorcentaje = insumos.map(insumo => ({
+    const insumosConPorcentaje = insumos.map((insumo: PrismaInsumoApicola) => ({
       ...insumo,
       porcentajeStock: insumo.cantidadMinima > 0
         ? Math.min((insumo.cantidadActual / insumo.cantidadMinima) * 100, 100)
@@ -343,7 +344,7 @@ insumosRoutes.get('/stats/resumen', async ({ headers }) => {
       stockAgotado: 0
     };
 
-    insumos.forEach(insumo => {
+    insumos.forEach((insumo: Pick<PrismaInsumoApicola, 'categoria' | 'cantidadActual' | 'cantidadMinima' | 'precioUnitario'>) => {
       // Contar por categoría
       stats.categorias[insumo.categoria] = (stats.categorias[insumo.categoria] || 0) + 1;
 

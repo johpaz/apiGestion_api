@@ -12,8 +12,7 @@ inspeccionesRoutes.get('/', async ({ headers }) => {
   try {
    
     const user = await authenticateToken({ headers });
-    console.log(`DEBUG ${user}`);
-    
+     
     const userId = user?.id;
    
 
