@@ -5,7 +5,7 @@
   "main": "dist/server.ts",
   "scripts": {
     "dev": "bun --hot src/server.ts",
-    "build": "bun build --target bun --outfile dist/index.js src/server.ts",
+     "build": "bun build ./src/index.ts --outdir ./dist --target bun",
     "start": "bun dist/server.ts",
     "test": "bun test",
     "lint": "eslint src/**/*.ts",
