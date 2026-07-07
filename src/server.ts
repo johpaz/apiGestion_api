@@ -41,7 +41,12 @@ prisma.$connect()
 const app = new Elysia()
   .use(errorHandler)
   .use(cors({
-    origin: process.env.CORS_ORIGIN,
+    origin: (() => {
+      const corsOrigin = process.env.CORS_ORIGIN;
+      if (!corsOrigin) return '*';
+      const origins = corsOrigin.split(',').map(o => o.trim()).filter(Boolean);
+      return origins.length === 1 ? origins[0] : origins;
+    })(),
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']

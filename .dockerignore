@@ -1,0 +1,41 @@
+# Dependencias
+node_modules
+
+# Build output
+dist
+build
+
+# Git
+.git
+.gitignore
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Environment files (no copiar secrets)
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs
+*.log
+
+# IDE
+.vscode
+.idea
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Prisma (no copiar migraciones en build, se ejecutan aparte)
+prisma/migrations
+
+# Tests
+tests
+__tests__
+*.test.ts
+*.spec.ts

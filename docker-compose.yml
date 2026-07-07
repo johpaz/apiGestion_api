@@ -1,0 +1,70 @@
+services:
+  api:
+    build: .
+    container_name: apicolmena-api
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - PORT=18790
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/apicolmena
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_EXPIRES_IN=${JWT_EXPIRES_IN:-7d}
+      - CORS_ORIGIN=${CORS_ORIGIN}
+      - BASE_URL=https://${APICOLMENA_DOMAIN}
+      - FRONTEND_URL=${FRONTEND_URL}
+      - API_VERSION=${API_VERSION:-v1}
+      - RESEND_API_KEY=${RESEND_API_KEY}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID}
+      - FIREBASE_CLIENT_EMAIL=${FIREBASE_CLIENT_EMAIL}
+      - FIREBASE_PRIVATE_KEY=${FIREBASE_PRIVATE_KEY}
+      - USD_TO_COP_RATE=${USD_TO_COP_RATE:-4000}
+      - EUR_TO_USD_RATE=${EUR_TO_USD_RATE:-1.05}
+      - EUR_TO_COP_RATE=${EUR_TO_COP_RATE:-4200}
+    ports:
+      - "18790:18790"
+    depends_on:
+      db:
+        condition: service_healthy
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.apicolmena.rule=Host(`${APICOLMENA_DOMAIN}`)
+      - traefik.http.routers.apicolmena.entrypoints=web,websecure
+      - traefik.http.routers.apicolmena.tls=true
+      - traefik.http.routers.apicolmena.tls.certresolver=mytlschallenge
+      - traefik.http.routers.apicolmena.middlewares=apicolmena-headers@docker
+      - traefik.http.middlewares.apicolmena-headers.headers.SSLRedirect=true
+      - traefik.http.middlewares.apicolmena-headers.headers.STSSeconds=315360000
+      - traefik.http.services.apicolmena.loadbalancer.server.port=18790
+    networks:
+      - n8n_evoapi
+      - default
+
+  db:
+    image: postgres:16-alpine
+    container_name: apicolmena-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=apicolmena
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d apicolmena"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - default
+
+volumes:
+  postgres_data:
+
+networks:
+  n8n_evoapi:
+    external: true
+  default:
+    driver: bridge

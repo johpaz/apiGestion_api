@@ -153,7 +153,7 @@ authRoutes.get('/google-auth', () => {
     // In a real implementation, this would redirect to Google's OAuth URL
     // For now, return the OAuth URL that the frontend can use
     const clientId = process.env.GOOGLE_CLIENT_ID || 'your-google-client-id';
-    const redirectUri = encodeURIComponent(`${process.env.BASE_URL || 'http://localhost:5000'}/auth/google-callback`);
+    const redirectUri = encodeURIComponent(`${process.env.BASE_URL || `https://${process.env.APICOLMENA_DOMAIN}` || 'http://localhost:5000'}/auth/google-callback`);
     const scope = encodeURIComponent('openid email profile');
     const responseType = 'code';
 
