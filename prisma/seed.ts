@@ -1,5 +1,4 @@
-import { PrismaClient } from '@prisma/client';
-import { hashPassword } from '../src/utils/password';
+import { PrismaClient } from '../src/generated/prisma/client';
 
 const prisma = new PrismaClient();
 
@@ -23,7 +22,7 @@ async function seed() {
   }
 
   // Crear el primer administrador
-  const hashedPassword = await hashPassword(adminPassword);
+  const hashedPassword = await Bun.password.hash(adminPassword);
 
   const admin = await prisma.usuario.create({
     data: {
