@@ -5,15 +5,19 @@ import { InsumoApicola as PrismaInsumoApicola } from '../generated/prisma/client
 import prisma from '../prisma/client';
 import { CategoriaInsumo, EstadoStock } from '../generated/prisma/client';
 import { z } from 'zod';
+import { validateInventorySource } from '../services/inventoryPolicy';
 
 // Esquemas de validación con Zod
 const createInsumoSchema = z.object({
-  catalogoItemId: z.string().min(1, 'Selecciona un artículo del catálogo'),
-  nombre: z.string().min(1, 'Nombre es requerido'),
+  catalogoItemId: z.string().trim().optional(),
+  esPersonalizado: z.boolean().default(false),
+  nombre: z.string().trim().min(2, 'Nombre es requerido').max(120),
   categoria: z.enum([
     'cajas_colmena', 'cajas_nucleo', 'marcos', 'alzas', 'techos', 'bases', 'pisos', 'excluidores_reina',
     'alimentadores', 'tratamientos', 'equipos_proteccion',
-    'herramientas', 'equipos_extraccion', 'envases', 'alimentacion', 'materiales_construccion', 'otros'
+    'herramientas', 'equipos_extraccion', 'envases', 'alimentacion', 'cria_reinas', 'sanidad_bioseguridad',
+    'medicion', 'transporte', 'procesamiento_cera', 'procesamiento_polen', 'procesamiento_propoleo',
+    'materiales_construccion', 'otros'
   ]),
   tipoItem: z.enum(['insumo', 'activo']).default('insumo'),
   estadoActivo: z.enum(['disponible', 'en_uso', 'mantenimiento', 'retirado']).optional(),
@@ -188,20 +192,24 @@ insumosRoutes.post('/', async ({ body, headers }) => {
     const userId = user?.id;
 
     const insumoData = validatedBody.data;
+    const sourceError = validateInventorySource(insumoData);
+    if (sourceError) return { success: false, error: sourceError } as ApiResponse;
     if ((insumoData.precioUnitario || 0) <= 0 && (insumoData.valorMercado || 0) <= 0) {
       return { success: false, error: 'Registra el precio de compra o el valor de mercado' } as ApiResponse;
     }
-    const catalogItem = await prisma.catalogoItemInventario.findFirst({ where: { id: insumoData.catalogoItemId, activo: true } });
-    if (!catalogItem) return { success: false, error: 'El artículo seleccionado no pertenece al catálogo activo' } as ApiResponse;
+    const catalogItem = insumoData.catalogoItemId
+      ? await prisma.catalogoItemInventario.findFirst({ where: { id: insumoData.catalogoItemId, activo: true } })
+      : null;
+    if (!insumoData.esPersonalizado && !catalogItem) return { success: false, error: 'El artículo seleccionado no pertenece al catálogo activo' } as ApiResponse;
 
     const nuevoInsumo = await prisma.insumoApicola.create({
       data: {
-        nombre: catalogItem.nombre,
-        categoria: catalogItem.categoria,
+        nombre: catalogItem?.nombre ?? insumoData.nombre.trim(),
+        categoria: catalogItem?.categoria ?? insumoData.categoria,
         descripcion: insumoData.descripcion,
         cantidadActual: insumoData.cantidadActual,
         cantidadMinima: insumoData.cantidadMinima,
-        unidad: catalogItem.unidad,
+        unidad: catalogItem?.unidad ?? insumoData.unidad.trim(),
         precioUnitario: insumoData.precioUnitario,
         valorMercado: insumoData.valorMercado,
         ubicacion: insumoData.ubicacion,
@@ -210,10 +218,10 @@ insumosRoutes.post('/', async ({ body, headers }) => {
         proveedor: insumoData.proveedor,
         notas: insumoData.notas,
         usuarioId: userId,
-        tipoItem: catalogItem.tipoItem,
-        estadoActivo: catalogItem.tipoItem === 'activo' ? (insumoData.estadoActivo || 'disponible') : null,
+        tipoItem: catalogItem?.tipoItem ?? insumoData.tipoItem,
+        estadoActivo: (catalogItem?.tipoItem ?? insumoData.tipoItem) === 'activo' ? (insumoData.estadoActivo || 'disponible') : null,
         codigoInterno: insumoData.codigoInterno,
-        catalogoItemId: catalogItem.id
+        catalogoItemId: catalogItem?.id ?? null
       }
     });
 
@@ -263,6 +271,10 @@ insumosRoutes.put('/:id', async ({ params, body, headers }) => {
     const { id } = params;
 
     const insumoData = validatedBody.data;
+    if (insumoData.esPersonalizado !== undefined) {
+      const sourceError = validateInventorySource(insumoData);
+      if (sourceError) return { success: false, error: sourceError } as ApiResponse;
+    }
     const catalogItem = insumoData.catalogoItemId
       ? await prisma.catalogoItemInventario.findFirst({ where: { id: insumoData.catalogoItemId, activo: true } })
       : null;
@@ -293,7 +305,7 @@ insumosRoutes.put('/:id', async ({ params, body, headers }) => {
         tipoItem: catalogItem?.tipoItem ?? insumoData.tipoItem,
         estadoActivo: (catalogItem?.tipoItem ?? insumoData.tipoItem) === 'activo' ? (insumoData.estadoActivo || 'disponible') : null,
         codigoInterno: insumoData.codigoInterno,
-        catalogoItemId: catalogItem?.id
+        catalogoItemId: insumoData.esPersonalizado === true ? null : catalogItem?.id
       }
     });
 
