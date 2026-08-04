@@ -8,7 +8,6 @@ const requiredVars = [
   'FIREBASE_PRIVATE_KEY',
   'FIREBASE_CLIENT_EMAIL',
   'FIREBASE_CLIENT_ID',
-  'FIREBASE_PRIVATE_KEY_ID',
   'FIREBASE_CLIENT_X509_CERT_URL'
 ];
 
@@ -24,15 +23,6 @@ requiredVars.forEach(varName => {
   }
 });
 
-// Additional validation for private key format
-const privateKey = process.env.FIREBASE_PRIVATE_KEY;
-if (privateKey) {
-  logger.info(`Private key starts with: ${privateKey.substring(0, 30)}...`);
-  logger.info(`Private key ends with: ...${privateKey.substring(privateKey.length - 30)}`);
-  logger.info(`Private key contains BEGIN marker: ${privateKey.includes('BEGIN PRIVATE KEY')}`);
-  logger.info(`Private key contains END marker: ${privateKey.includes('END PRIVATE KEY')}`);
-}
-
 // Format the private key properly (replace escaped newlines with actual newlines)
 const formatPrivateKey = (key: string | undefined): string | undefined => {
   if (!key) return key;
@@ -43,13 +33,13 @@ const formatPrivateKey = (key: string | undefined): string | undefined => {
 const serviceAccount = {
   type: 'service_account',
   project_id: process.env.FIREBASE_PROJECT_ID,
-  private_key_id: process.env.FIREBASE_PRIVATE_KEY,
+  private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID,
   private_key: formatPrivateKey(process.env.FIREBASE_PRIVATE_KEY), 
   client_email: process.env.FIREBASE_CLIENT_EMAIL,
   client_id: process.env.FIREBASE_CLIENT_ID,
   auth_uri: 'https://accounts.google.com/o/oauth2/auth',
   token_uri: 'https://oauth2.googleapis.com/token',
-  auth_provider_x509_cert_url: process.env.FIREBASE_PRIVATE_KEY_ID,
+  auth_provider_x509_cert_url: 'https://www.googleapis.com/oauth2/v1/certs',
   client_x509_cert_url: process.env.FIREBASE_CLIENT_X509_CERT_URL,
 };
 let firebaseAdmin: typeof firebase | null = firebase;

@@ -22,9 +22,9 @@ dashboardRoutes.get('/stats', async ({ headers }) => {
       prisma.inspeccion.findMany({ where: { usuarioId: userId } }),
       prisma.producto.findMany({ where: { usuarioId: userId } }),
       prisma.produccion.findMany({ where: { usuarioId: userId } }),
-      prisma.transaccion.findMany({ where: { usuarioId: userId } }),
+      prisma.transaccion.findMany({ where: { usuarioId: userId, anuladoAt: null } }),
       prisma.enjambre.findMany({ where: { colmena: { usuarioId: userId } } }),
-      prisma.nucleo.findMany({ where: { colmena: { usuarioId: userId } } }),
+      prisma.nucleo.findMany({ where: { apiario: { usuarioId: userId } } }),
       prisma.insumoApicola.findMany({ where: { usuarioId: userId } }),
       prisma.apiario.findMany({ where: { usuarioId: userId } })
     ]);

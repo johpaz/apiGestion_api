@@ -4,6 +4,7 @@ import { ApiResponse, AuthResponse, LoginRequest, RegisterRequest, Usuario } fro
 import { auth as firebaseAuth } from '../firebase';
 import logger from '../utils/logger';
 import prisma from '../prisma/client';
+import { authenticateToken } from '../middleware/auth';
 
 // Función para hashear contraseñas usando Bun.password
 async function hashPassword(password: string): Promise<string> {
@@ -85,9 +86,15 @@ authRoutes.post('/login', async ({ body }) => {
 });
 
 // Register endpoint
-authRoutes.post('/register', async ({ body }) => {
+authRoutes.post('/register', async ({ body, set }) => {
   try {
-    const { nombre, email, password, rol = 'apicultor' }: RegisterRequest = body as RegisterRequest;
+    const { nombre, email, password }: RegisterRequest = body as RegisterRequest;
+
+    const systemSettings = await prisma.configuracionSistema.findUnique({ where: { id: 'principal' } });
+    if (systemSettings && !systemSettings.allowRegistration) {
+      set.status = 403;
+      return { success: false, error: 'El registro de usuarios está deshabilitado' } as ApiResponse;
+    }
 
     // Check if user already exists
     const existingUser = await prisma.usuario.findUnique({
@@ -109,7 +116,7 @@ authRoutes.post('/register', async ({ body }) => {
         nombre,
         email,
         password: hashedPassword,
-        rol,
+        rol: 'apicultor',
         activo: true,
         moneda: 'COP',
         colmenasAsignadas: []
@@ -174,11 +181,9 @@ authRoutes.get('/google-auth', () => {
 });
 
 // Google OAuth callback endpoint
-authRoutes.post('/google-callback', async ({ body, headers }) => {
+authRoutes.post('/google-callback', async ({ body, set }) => {
   try {
     logger.info('Recibida solicitud POST /google-callback');
-    logger.info({ body }, 'Body recibido');
-    logger.info({ headers: Object.fromEntries(Object.entries(headers).filter(([k]) => k.toLowerCase().includes('origin') || k.toLowerCase().includes('referer'))) }, 'Headers relevantes');
 
     const { idToken }: { idToken: string } = body as { idToken: string };
 
@@ -207,23 +212,35 @@ authRoutes.post('/google-callback', async ({ body, headers }) => {
     logger.info({ uid: decodedToken.uid, email: decodedToken.email }, 'Token decodificado exitosamente');
 
     // Extract user information
-    const { uid, email, name, picture } = decodedToken;
+    const { uid, email, name } = decodedToken;
+
+    if (!email) {
+      return {
+        success: false,
+        error: 'La cuenta de Firebase no tiene un correo disponible'
+      } as ApiResponse;
+    }
 
     // Check if user exists in our system
     let user = await prisma.usuario.findUnique({
       where: {
-        email: email!
+        email
       }
     });
     logger.info({ userExists: !!user, email }, 'Verificando existencia de usuario en base de datos');
 
     if (!user) {
+      const systemSettings = await prisma.configuracionSistema.findUnique({ where: { id: 'principal' } });
+      if (systemSettings && !systemSettings.allowRegistration) {
+        set.status = 403;
+        return { success: false, error: 'El registro de usuarios está deshabilitado' } as ApiResponse;
+      }
       // Create new user from Google OAuth
       user = await prisma.usuario.create({
         data: {
           id: uid,
-          nombre: name || email!.split('@')[0],
-          email: email!,
+          nombre: name || email.split('@')[0],
+          email,
           password: '', // No password for OAuth users
           rol: 'apicultor',
           activo: true,
@@ -291,79 +308,12 @@ authRoutes.post('/google-callback', async ({ body, headers }) => {
 
 // Verify token endpoint
 authRoutes.get('/verify', async ({ headers }) => {
-  const authHeader = headers.authorization;
-  const token = authHeader && authHeader.split(' ')[1];
-
-  if (!token) {
-    return {
-      success: false,
-      error: 'Token requerido'
-    } as ApiResponse;
-  }
-
-  try {
-    // Decode token header to check algorithm
-    const decodedHeader = jwt.decode(token, { complete: true });
-    let decoded: any;
-
-    if (decodedHeader?.header?.alg === 'RS256') {
-      // RS256: Firebase token
-      if (!firebaseAuth) {
-        return {
-          success: false,
-          error: 'Firebase Auth no está disponible'
-        } as ApiResponse;
-      }
-
-      const firebaseDecoded = await firebaseAuth.verifyIdToken(token);
-
-      // Find user in database by email
-      const user = await prisma.usuario.findUnique({
-        where: {
-          email: firebaseDecoded.email!,
-          activo: true
-        }
-      });
-
-      if (!user) {
-        return {
-          success: false,
-          error: 'Usuario no encontrado'
-        } as ApiResponse;
-      }
-
-      decoded = {
-        id: user.id,
-        email: user.email,
-        rol: user.rol,
-        nombre: user.nombre,
-        moneda: user.moneda,
-        activo: user.activo,
-        fechaRegistro: user.fechaRegistro,
-        ultimoAcceso: user.ultimoAcceso,
-        colmenasAsignadas: user.colmenasAsignadas,
-        alertasActivadas: user.alertasActivadas,
-        notificacionesEmail: user.notificacionesEmail,
-        idioma: user.idioma
-      };
-
-    } else {
-      // HS256: Our own JWT
-      const jwtSecret = process.env.JWT_SECRET || 'fallback-secret';
-      decoded = jwt.verify(token, jwtSecret, { algorithms: ['HS256'] });
-    }
-
-    return {
-      success: true,
-      data: decoded,
-      message: 'Token válido'
-    } as ApiResponse;
-  } catch (err) {
-    return {
-      success: false,
-      error: 'Token inválido'
-    } as ApiResponse;
-  }
+  const user = await authenticateToken({ headers });
+  return {
+    success: true,
+    data: user,
+    message: 'Token válido'
+  } as ApiResponse;
 });
 
 export default authRoutes;

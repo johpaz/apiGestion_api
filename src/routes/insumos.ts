@@ -8,17 +8,22 @@ import { z } from 'zod';
 
 // Esquemas de validación con Zod
 const createInsumoSchema = z.object({
+  catalogoItemId: z.string().min(1, 'Selecciona un artículo del catálogo'),
   nombre: z.string().min(1, 'Nombre es requerido'),
   categoria: z.enum([
-    'marcos', 'alzas', 'techos', 'pisos', 'excluidores_reina',
+    'cajas_colmena', 'cajas_nucleo', 'marcos', 'alzas', 'techos', 'bases', 'pisos', 'excluidores_reina',
     'alimentadores', 'tratamientos', 'equipos_proteccion',
-    'herramientas', 'materiales_construccion', 'otros'
+    'herramientas', 'equipos_extraccion', 'envases', 'alimentacion', 'materiales_construccion', 'otros'
   ]),
+  tipoItem: z.enum(['insumo', 'activo']).default('insumo'),
+  estadoActivo: z.enum(['disponible', 'en_uso', 'mantenimiento', 'retirado']).optional(),
+  codigoInterno: z.string().trim().max(80).optional(),
   descripcion: z.string().optional(),
   cantidadActual: z.number().min(0, 'Cantidad actual debe ser mayor o igual a 0'),
   cantidadMinima: z.number().min(0, 'Cantidad mínima debe ser mayor o igual a 0'),
   unidad: z.string().min(1, 'Unidad es requerida'),
   precioUnitario: z.number().min(0, 'Precio unitario debe ser mayor o igual a 0').optional(),
+  valorMercado: z.number().min(0, 'Valor de mercado debe ser mayor o igual a 0').optional(),
   ubicacion: z.string().optional(),
   fechaCaducidad: z.string().datetime().optional(),
   lote: z.string().optional(),
@@ -28,6 +33,14 @@ const createInsumoSchema = z.object({
 
 const updateInsumoSchema = createInsumoSchema.partial();
 
+const movimientoSchema = z.object({
+  tipo: z.enum(['entrada', 'salida', 'ajuste']),
+  cantidad: z.number().finite().min(0),
+  motivo: z.string().trim().min(2, 'Indica el motivo del movimiento').max(240)
+}).superRefine((data, ctx) => {
+  if (data.tipo !== 'ajuste' && data.cantidad <= 0) ctx.addIssue({ code: 'custom', message: 'La cantidad debe ser mayor que cero', path: ['cantidad'] });
+});
+
 const queryParamsSchema = z.object({
   page: z.string().transform(val => parseInt(val)).refine(val => val > 0, 'Página debe ser mayor a 0').optional(),
   limit: z.string().transform(val => parseInt(val)).refine(val => val > 0 && val <= 100, 'Límite debe estar entre 1 y 100').optional(),
@@ -36,6 +49,13 @@ const queryParamsSchema = z.object({
 });
 
 const insumosRoutes = new Elysia({ prefix: '/insumos' });
+
+// Catálogo maestro: nombres, categorías y unidades estandarizadas por el sistema
+insumosRoutes.get('/catalogo', async ({ headers }) => {
+  await authenticateToken({ headers });
+  const items = await prisma.catalogoItemInventario.findMany({ where: { activo: true }, orderBy: [{ tipoItem: 'asc' }, { nombre: 'asc' }] });
+  return { success: true, data: items } as ApiResponse;
+});
 
 // GET /insumos - Listar insumos del usuario
 insumosRoutes.get('/', async ({ headers, query }) => {
@@ -55,7 +75,7 @@ insumosRoutes.get('/', async ({ headers, query }) => {
 
     const { page = 1, limit = 50, categoria, search } = validatedQuery.data;
 
-    const where: any = { usuarioId: userId };
+    const where: any = { usuarioId: userId, anuladoAt: null };
 
     if (categoria && categoria !== 'todos') {
       where.categoria = categoria as CategoriaInsumo;
@@ -117,7 +137,8 @@ insumosRoutes.get('/:id', async ({ params, headers }) => {
     const insumo = await prisma.insumoApicola.findFirst({
       where: {
         id,
-        usuarioId: userId
+        usuarioId: userId,
+        anuladoAt: null
       }
     });
 
@@ -167,24 +188,40 @@ insumosRoutes.post('/', async ({ body, headers }) => {
     const userId = user?.id;
 
     const insumoData = validatedBody.data;
+    if ((insumoData.precioUnitario || 0) <= 0 && (insumoData.valorMercado || 0) <= 0) {
+      return { success: false, error: 'Registra el precio de compra o el valor de mercado' } as ApiResponse;
+    }
+    const catalogItem = await prisma.catalogoItemInventario.findFirst({ where: { id: insumoData.catalogoItemId, activo: true } });
+    if (!catalogItem) return { success: false, error: 'El artículo seleccionado no pertenece al catálogo activo' } as ApiResponse;
 
     const nuevoInsumo = await prisma.insumoApicola.create({
       data: {
-        nombre: insumoData.nombre,
-        categoria: insumoData.categoria,
+        nombre: catalogItem.nombre,
+        categoria: catalogItem.categoria,
         descripcion: insumoData.descripcion,
         cantidadActual: insumoData.cantidadActual,
         cantidadMinima: insumoData.cantidadMinima,
-        unidad: insumoData.unidad,
+        unidad: catalogItem.unidad,
         precioUnitario: insumoData.precioUnitario,
+        valorMercado: insumoData.valorMercado,
         ubicacion: insumoData.ubicacion,
         fechaCaducidad: insumoData.fechaCaducidad ? new Date(insumoData.fechaCaducidad) : null,
         lote: insumoData.lote,
         proveedor: insumoData.proveedor,
         notas: insumoData.notas,
-        usuarioId: userId
+        usuarioId: userId,
+        tipoItem: catalogItem.tipoItem,
+        estadoActivo: catalogItem.tipoItem === 'activo' ? (insumoData.estadoActivo || 'disponible') : null,
+        codigoInterno: insumoData.codigoInterno,
+        catalogoItemId: catalogItem.id
       }
     });
+
+    if (nuevoInsumo.cantidadActual > 0) {
+      await prisma.movimientoInventario.create({
+        data: { insumoId: nuevoInsumo.id, tipo: 'entrada', cantidad: nuevoInsumo.cantidadActual, cantidadAnterior: 0, cantidadNueva: nuevoInsumo.cantidadActual, motivo: 'Cantidad inicial', registradoPorId: userId }
+      });
+    }
 
     const insumoConPorcentaje = {
       ...nuevoInsumo,
@@ -226,25 +263,37 @@ insumosRoutes.put('/:id', async ({ params, body, headers }) => {
     const { id } = params;
 
     const insumoData = validatedBody.data;
+    const catalogItem = insumoData.catalogoItemId
+      ? await prisma.catalogoItemInventario.findFirst({ where: { id: insumoData.catalogoItemId, activo: true } })
+      : null;
+    if (insumoData.catalogoItemId && !catalogItem) return { success: false, error: 'El artículo seleccionado no pertenece al catálogo activo' } as ApiResponse;
+    if (insumoData.precioUnitario !== undefined && insumoData.valorMercado !== undefined && insumoData.precioUnitario <= 0 && insumoData.valorMercado <= 0) {
+      return { success: false, error: 'Registra el precio de compra o el valor de mercado' } as ApiResponse;
+    }
 
     const insumoActualizado = await prisma.insumoApicola.updateMany({
       where: {
         id,
-        usuarioId: userId
+        usuarioId: userId,
+        anuladoAt: null
       },
       data: {
-        nombre: insumoData.nombre,
-        categoria: insumoData.categoria,
+        nombre: catalogItem?.nombre ?? insumoData.nombre,
+        categoria: catalogItem?.categoria ?? insumoData.categoria,
         descripcion: insumoData.descripcion,
-        cantidadActual: insumoData.cantidadActual,
         cantidadMinima: insumoData.cantidadMinima,
-        unidad: insumoData.unidad,
+        unidad: catalogItem?.unidad ?? insumoData.unidad,
         precioUnitario: insumoData.precioUnitario,
+        valorMercado: insumoData.valorMercado,
         ubicacion: insumoData.ubicacion,
         fechaCaducidad: insumoData.fechaCaducidad ? new Date(insumoData.fechaCaducidad) : null,
         lote: insumoData.lote,
         proveedor: insumoData.proveedor,
-        notas: insumoData.notas
+        notas: insumoData.notas,
+        tipoItem: catalogItem?.tipoItem ?? insumoData.tipoItem,
+        estadoActivo: (catalogItem?.tipoItem ?? insumoData.tipoItem) === 'activo' ? (insumoData.estadoActivo || 'disponible') : null,
+        codigoInterno: insumoData.codigoInterno,
+        catalogoItemId: catalogItem?.id
       }
     });
 
@@ -281,7 +330,62 @@ insumosRoutes.put('/:id', async ({ params, body, headers }) => {
   }
 });
 
-// DELETE /insumos/:id - Eliminar insumo
+// POST /insumos/:id/movimientos - Entrada, salida o corrección auditable
+insumosRoutes.post('/:id/movimientos', async ({ params, body, headers, set }) => {
+  const user = await authenticateToken({ headers });
+  const parsed = movimientoSchema.safeParse(body);
+  if (!parsed.success) {
+    set.status = 400;
+    return { success: false, error: parsed.error.issues[0]?.message || 'Movimiento inválido' } as ApiResponse;
+  }
+
+  const item = await prisma.insumoApicola.findFirst({
+    where: { id: params.id, usuarioId: user.id, anuladoAt: null }
+  });
+  if (!item) {
+    set.status = 404;
+    return { success: false, error: 'Artículo no encontrado' } as ApiResponse;
+  }
+
+  const previous = item.cantidadActual;
+  const next = parsed.data.tipo === 'entrada'
+    ? previous + parsed.data.cantidad
+    : parsed.data.tipo === 'salida'
+      ? previous - parsed.data.cantidad
+      : parsed.data.cantidad;
+
+  if (next < 0) {
+    set.status = 409;
+    return { success: false, error: `Solo hay ${previous} ${item.unidad} disponibles` } as ApiResponse;
+  }
+
+  const result = await prisma.$transaction(async (tx) => {
+    const updated = await tx.insumoApicola.update({
+      where: { id: item.id },
+      data: { cantidadActual: next, estadoStock: calcularEstadoStock(next, item.cantidadMinima) }
+    });
+    const movement = await tx.movimientoInventario.create({
+      data: { insumoId: item.id, tipo: parsed.data.tipo, cantidad: parsed.data.cantidad, cantidadAnterior: previous, cantidadNueva: next, motivo: parsed.data.motivo, registradoPorId: user.id }
+    });
+    return { updated, movement };
+  });
+
+  set.status = 201;
+  return { success: true, data: { item: result.updated, movimiento: result.movement }, message: 'Movimiento registrado' } as ApiResponse;
+});
+
+insumosRoutes.get('/:id/movimientos', async ({ params, headers, set }) => {
+  const user = await authenticateToken({ headers });
+  const item = await prisma.insumoApicola.findFirst({ where: { id: params.id, usuarioId: user.id } });
+  if (!item) {
+    set.status = 404;
+    return { success: false, error: 'Artículo no encontrado' } as ApiResponse;
+  }
+  const movements = await prisma.movimientoInventario.findMany({ where: { insumoId: item.id }, orderBy: { fecha: 'desc' } });
+  return { success: true, data: movements } as ApiResponse;
+});
+
+// DELETE /insumos/:id - Baja lógica del artículo
 insumosRoutes.delete('/:id', async ({ params, headers }) => {
   try {
     const user = await authenticateToken({ headers });
@@ -292,7 +396,8 @@ insumosRoutes.delete('/:id', async ({ params, headers }) => {
     const insumoExistente = await prisma.insumoApicola.findFirst({
       where: {
         id,
-        usuarioId: userId
+        usuarioId: userId,
+        anuladoAt: null
       }
     });
 
@@ -303,13 +408,14 @@ insumosRoutes.delete('/:id', async ({ params, headers }) => {
       } as ApiResponse;
     }
 
-    const insumoEliminado = await prisma.insumoApicola.delete({
-      where: { id }
+    await prisma.insumoApicola.update({
+      where: { id },
+      data: { anuladoAt: new Date(), anuladoPorId: userId, motivoAnulacion: 'Dado de baja desde inventario' }
     });
 
     return {
       success: true,
-      message: 'Insumo eliminado exitosamente'
+      message: 'Artículo dado de baja; su historial se conserva'
     } as ApiResponse;
   } catch (error: any) {
     console.error('Delete insumo error:', error);
@@ -327,12 +433,13 @@ insumosRoutes.get('/stats/resumen', async ({ headers }) => {
     const userId = user?.id;
 
     const insumos = await prisma.insumoApicola.findMany({
-      where: { usuarioId: userId },
+      where: { usuarioId: userId, anuladoAt: null },
       select: {
         categoria: true,
         cantidadActual: true,
         cantidadMinima: true,
         precioUnitario: true
+        ,valorMercado: true
       }
     });
 
@@ -344,13 +451,14 @@ insumosRoutes.get('/stats/resumen', async ({ headers }) => {
       stockAgotado: 0
     };
 
-    insumos.forEach((insumo: Pick<PrismaInsumoApicola, 'categoria' | 'cantidadActual' | 'cantidadMinima' | 'precioUnitario'>) => {
+    insumos.forEach((insumo: Pick<PrismaInsumoApicola, 'categoria' | 'cantidadActual' | 'cantidadMinima' | 'precioUnitario' | 'valorMercado'>) => {
       // Contar por categoría
       stats.categorias[insumo.categoria] = (stats.categorias[insumo.categoria] || 0) + 1;
 
       // Calcular valor total
-      if (insumo.precioUnitario) {
-        stats.valorTotal += insumo.cantidadActual * insumo.precioUnitario;
+      const unitValue = insumo.valorMercado || insumo.precioUnitario;
+      if (unitValue) {
+        stats.valorTotal += insumo.cantidadActual * unitValue;
       }
 
       // Contar stock bajo/agotado

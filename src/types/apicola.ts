@@ -48,7 +48,6 @@ export interface InspeccionSanitaria {
     tipoAlimento: string;
   };
   patologias: PatologiaDetectada[];
-  tratamientos: TratamientoAplicado[];
   observaciones: string;
   usuarioId: string;
   createdAt: Date;
@@ -59,17 +58,7 @@ export interface PatologiaDetectada {
   id: string;
   tipo: 'nosemosis' | 'varroasis' | 'cria_yeso' | 'loque_e' | 'loque_a' | 'polilla' | 'insectos' | 'arañas' | 'cria_cal' | 'otros';
   severidad: 'bajo' | 'medio' | 'alto' | 'muy_alto';
-  tratamiento: string;
   observaciones?: string;
-}
-
-export interface TratamientoAplicado {
-  id: string;
-  tipo: 'quimico' | 'organico' | 'biologico';
-  producto: string;
-  dosis: string;
-  fechaAplicacion: string;
-  proximaAplicacion?: string;
 }
 
 export interface Enjambre {
@@ -179,7 +168,6 @@ export interface RegisterRequest {
   nombre: string;
   email: string;
   password: string;
-  rol?: 'apicultor' | 'administrador';
 }
 
 export interface AuthResponse {
@@ -191,11 +179,16 @@ export interface InsumoApicola {
   id: string;
   nombre: string;
   categoria: CategoriaInsumo;
+  tipoItem: 'insumo' | 'activo';
+  estadoActivo?: 'disponible' | 'en_uso' | 'mantenimiento' | 'retirado';
+  codigoInterno?: string;
+  catalogoItemId?: string;
   descripcion?: string;
   cantidadActual: number;
   cantidadMinima: number;
   unidad: string;
   precioUnitario?: number;
+  valorMercado?: number;
   ubicacion?: string;
   estadoStock: EstadoStock;
   porcentajeStock?: number;
@@ -209,15 +202,28 @@ export interface InsumoApicola {
 }
 
 export type CategoriaInsumo =
+  | 'cajas_colmena'
+  | 'cajas_nucleo'
   | 'marcos'
   | 'alzas'
   | 'techos'
+  | 'bases'
   | 'pisos'
   | 'excluidores_reina'
   | 'alimentadores'
   | 'tratamientos'
   | 'equipos_proteccion'
   | 'herramientas'
+  | 'equipos_extraccion'
+  | 'envases'
+  | 'alimentacion'
+  | 'cria_reinas'
+  | 'sanidad_bioseguridad'
+  | 'medicion'
+  | 'transporte'
+  | 'procesamiento_cera'
+  | 'procesamiento_polen'
+  | 'procesamiento_propoleo'
   | 'materiales_construccion'
   | 'otros';
 

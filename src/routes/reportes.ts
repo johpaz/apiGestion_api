@@ -171,27 +171,15 @@ reportesRoutes.get('/estado-sanitario', async (context: any) => {
       } as ApiResponse;
     }
 
-    // Get latest inspection for each colmena
-    const estadoSanitarioData = await prisma.$queryRaw`
-      SELECT
-        i."estadoSanidad",
-        COUNT(*) as count
-      FROM inspecciones i
-      INNER JOIN (
-        SELECT "colmenaId", MAX("fecha") as max_fecha
-        FROM inspecciones
-        WHERE "usuarioId" = ${userId}
-        GROUP BY "colmenaId"
-      ) latest ON i."colmenaId" = latest."colmenaId" AND i."fecha" = latest.max_fecha
-      WHERE i."usuarioId" = ${userId}
-      GROUP BY i."estadoSanidad"
-    `;
-
-    const data = (estadoSanitarioData as any[]).map(row => ({
-      estado: row.estadoSanidad,
-      count: parseInt(row.count),
-      porcentaje: Math.round((parseInt(row.count) / totalColmenas) * 100)
-    }));
+    const [casosActivos, casosCriticos] = await Promise.all([
+      prisma.casoSanitario.count({ where: { usuarioId: userId, anuladoAt: null, estado: { in: ['abierto', 'en_seguimiento'] } } }),
+      prisma.casoSanitario.count({ where: { usuarioId: userId, anuladoAt: null, estado: { in: ['abierto', 'en_seguimiento'] }, gravedad: { in: ['alta', 'critica'] } } }),
+    ]);
+    const data = {
+      saludables: Math.max(0, totalColmenas - casosActivos),
+      seguimiento: casosActivos,
+      atencion: casosCriticos,
+    };
 
     return {
       success: true,

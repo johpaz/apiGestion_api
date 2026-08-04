@@ -148,17 +148,6 @@ export class AlertService {
       });
     }
 
-    // Alerta por tratamientos aplicados
-    if (inspeccionData.tratamientos && inspeccionData.tratamientos.trim() !== '') {
-      alerts.push({
-        titulo: 'Tratamiento aplicado',
-        mensaje: `Se ha aplicado tratamiento en la colmena ${inspeccionData.colmena?.nombre || 'desconocida'}: ${inspeccionData.tratamientos}`,
-        tipo: TipoAlerta.sanidad,
-        prioridad: PrioridadAlerta.media,
-        usuarioId,
-      });
-    }
-
     // Alerta por baja población
     if (inspeccionData.poblacion === 'Baja') {
       alerts.push({
@@ -382,7 +371,7 @@ export class AlertService {
             where: { id: entidadId },
             select: { estado: true, alertasRecurrentesActivadas: true },
           });
-          return nucleo?.estado === 'Nuevo' || nucleo?.estado === 'Bueno';
+          return nucleo?.estado === 'en_formacion' || nucleo?.estado === 'en_desarrollo' || nucleo?.estado === 'listo';
 
         default:
           return false;

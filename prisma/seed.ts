@@ -5,6 +5,28 @@ const prisma = new PrismaClient();
 async function seed() {
   console.log('🌱 Ejecutando seed...');
 
+  const patologias = [
+    ['loque-americana', 'Loque americana', 'Paenibacillus larvae', true],
+    ['loque-europea', 'Loque europea', 'Melissococcus plutonius', true],
+    ['tropilaelaps', 'Infestación por Tropilaelaps', 'Tropilaelaps spp.', true],
+    ['acarapidosis', 'Acarapidosis', 'Acarapis woodi', true],
+    ['varroosis', 'Varroosis', 'Varroa destructor', true],
+    ['aethiniosis', 'Aethiniosis', 'Aethina tumida', true],
+    ['nosemosis', 'Nosemosis', 'Nosema spp.', false],
+    ['ascosferosis', 'Ascosferosis', 'Ascosphaera apis', false],
+    ['sindrome-colapso', 'Síndrome de colapso de colonias', null, false],
+    ['otra', 'Otra sospecha sanitaria', null, false],
+  ] as const;
+
+  for (const [codigo, nombre, agente, declaracionObligatoria] of patologias) {
+    await prisma.patologiaSanitaria.upsert({
+      where: { codigo },
+      create: { codigo, nombre, agente, declaracionObligatoria },
+      update: { nombre, agente, declaracionObligatoria, activa: true },
+    });
+  }
+  console.log('✅ Catálogo sanitario actualizado');
+
   const adminEmail = process.env.ADMIN_EMAIL || 'admin@apicolmena.com';
   const adminPassword = process.env.ADMIN_PASSWORD || 'Admin123!';
   const adminName = process.env.ADMIN_NAME || 'Administrador';

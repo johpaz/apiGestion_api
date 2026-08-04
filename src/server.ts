@@ -19,6 +19,8 @@ import alertasRoutes from './routes/alertas';
 import insumosRoutes from './routes/insumos';
 import exchangeRatesRoutes from './routes/exchangeRates';
 import reportesRoutes from './routes/reportes';
+import adminRoutes from './routes/admin';
+import casosSanitariosRoutes from './routes/casosSanitarios';
 import prisma from './prisma/client';
 import { schedulerService } from './services/schedulerService';
 
@@ -48,7 +50,7 @@ const app = new Elysia()
       return origins.length === 1 ? origins[0] : origins;
     })(),
     credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
   }))
   .onRequest(({ request }) => {
@@ -88,6 +90,8 @@ const app = new Elysia()
       .use(insumosRoutes)
       .use(exchangeRatesRoutes)
       .use(reportesRoutes)
+      .use(adminRoutes)
+      .use(casosSanitariosRoutes)
   )
   .listen(PORT, () => {
     logger.info(`🐝 ApiGestión Pro API ejecutándose en puerto ${PORT}`);

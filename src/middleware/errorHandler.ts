@@ -1,10 +1,11 @@
 import { Elysia } from 'elysia';
 import { ApiResponse } from '../types/apicola';
 import logger from '../utils/logger';
+import { AuthenticationError, AuthorizationError } from './authorization';
 
 // Plugin de manejo de errores para Elysia
 export const errorHandler = new Elysia()
-  .onError(({ code, error, set }) => {
+  .onError({ as: 'global' }, ({ code, error, set }) => {
     logger.error(`Error: ${error}`);
 
     // Default error
@@ -15,6 +16,16 @@ export const errorHandler = new Elysia()
 
     // Handle different error types
     if (error instanceof Error) {
+      if (error instanceof AuthenticationError) {
+        set.status = 401;
+        errorResponse.error = error.message;
+      }
+
+      if (error instanceof AuthorizationError) {
+        set.status = 403;
+        errorResponse.error = error.message;
+      }
+
       // Validation errors
       if (error.name === 'ValidationError') {
         errorResponse.error = 'Datos de entrada inválidos';
@@ -31,15 +42,6 @@ export const errorHandler = new Elysia()
       if (error.name === 'TokenExpiredError') {
         errorResponse.error = 'Token expirado';
         set.status = 401;
-      }
-
-      // Custom auth errors
-      if (error.message === 'Token de acceso requerido' ||
-          error.message === 'Token inválido o expirado' ||
-          error.message === 'Usuario no autenticado' ||
-          error.message === 'No tienes permisos para acceder a este recurso') {
-        set.status = 401;
-        errorResponse.error = error.message;
       }
 
       // Duplicate key error (for unique constraints)

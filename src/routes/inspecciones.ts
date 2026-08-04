@@ -17,13 +17,14 @@ inspeccionesRoutes.get('/', async ({ headers }) => {
    
 
     const inspecciones = await prisma.inspeccion.findMany({
-      where: { usuarioId: userId },
+      where: { ...(user.rol === 'administrador' ? {} : { usuarioId: userId }), anuladoAt: null },
       include: {
         colmenas: true,
         nucleos: true,
         enjambres: true,
         usuario: true
-      }
+      },
+      orderBy: { fecha: 'desc' }
     });
 
     return {
@@ -91,6 +92,19 @@ inspeccionesRoutes.post('/', async ({ body, headers }) => {
     const inspeccionData = body as any;
     console.log('DEBUG: POST /inspecciones - userId:', userId, 'Datos recibidos:', inspeccionData);
 
+    if (user.rol === 'administrador') {
+      return { success: false, error: 'El administrador tiene acceso de auditoría únicamente' } as ApiResponse;
+    }
+
+    const [ownedColmenas, ownedNucleos, ownedEnjambres] = await Promise.all([
+      prisma.colmena.count({ where: { id: { in: inspeccionData.colmenaIds || [] }, usuarioId: userId } }),
+      prisma.nucleo.count({ where: { id: { in: inspeccionData.nucleoIds || [] }, apiario: { usuarioId: userId } } }),
+      prisma.enjambre.count({ where: { id: { in: inspeccionData.enjambreIds || [] }, colmena: { usuarioId: userId } } }),
+    ]);
+    if (ownedColmenas !== (inspeccionData.colmenaIds || []).length || ownedNucleos !== (inspeccionData.nucleoIds || []).length || ownedEnjambres !== (inspeccionData.enjambreIds || []).length) {
+      return { success: false, error: 'Una entidad no existe o no pertenece al usuario' } as ApiResponse;
+    }
+
     const newInspeccion = await prisma.inspeccion.create({
       data: {
         fecha: inspeccionData.fecha ? new Date(inspeccionData.fecha) : new Date(),
@@ -100,10 +114,14 @@ inspeccionesRoutes.post('/', async ({ body, headers }) => {
         patologiasApicolas: inspeccionData.patologiasApicolas || [],
         numColmenasAfectadas: inspeccionData.numColmenasAfectadas,
         signosClinicos: inspeccionData.signosClinicos || [],
+        proximaRevision: inspeccionData.proximaRevision ? new Date(inspeccionData.proximaRevision) : undefined,
         colmenas: {
           connect: inspeccionData.colmenaIds?.map((id: string) => ({ id })) || []
         },
         nucleoIds: inspeccionData.nucleoIds || [],
+        nucleos: {
+          connect: inspeccionData.nucleoIds?.map((id: string) => ({ id })) || []
+        },
         enjambres: {
           connect: inspeccionData.enjambreIds?.map((id: string) => ({ id })) || []
         },
@@ -182,6 +200,7 @@ inspeccionesRoutes.put('/:id', async ({ params, body, headers }) => {
         patologiasApicolas: inspeccionData.patologiasApicolas,
         numColmenasAfectadas: inspeccionData.numColmenasAfectadas,
         signosClinicos: inspeccionData.signosClinicos,
+        proximaRevision: inspeccionData.proximaRevision ? new Date(inspeccionData.proximaRevision) : undefined,
         // Note: Relations are handled separately for updates
         nucleoIds: inspeccionData.nucleoIds,
         // Note: Relations are handled separately for updates
@@ -217,31 +236,37 @@ inspeccionesRoutes.put('/:id', async ({ params, body, headers }) => {
   }
 });
 
-inspeccionesRoutes.delete('/:id', async ({ params, headers }) => {
+inspeccionesRoutes.post('/:id/anulaciones', async ({ params, body, headers }) => {
   try {
     const user = await authenticateToken({ headers });
-
     const { id } = params;
-    const userId = user?.id;
-      const deleted = await prisma.inspeccion.deleteMany({
-      where: { id, usuarioId: userId }
+    const motivo = String((body as any)?.motivo || '').trim();
+    if (motivo.length < 5) return { success: false, error: 'El motivo de anulación es obligatorio' } as ApiResponse;
+    const inspeccion = await prisma.inspeccion.findUnique({ where: { id } });
+    if (!inspeccion) return { success: false, error: 'Inspección no encontrada' } as ApiResponse;
+    if (user.rol !== 'administrador' && inspeccion.usuarioId !== user.id) return { success: false, error: 'No tienes permisos' } as ApiResponse;
+    if (inspeccion.anuladoAt) return { success: false, error: 'La inspección ya está anulada' } as ApiResponse;
+    const updated = await prisma.inspeccion.update({
+      where: { id },
+      data: { anuladoAt: new Date(), anuladoPorId: user.id, motivoAnulacion: motivo }
     });
-
-    if (deleted.count === 0) {
-      return { success: false, error: 'Inspección no encontrada o no autorizada' } as ApiResponse;
-    }
-
     return {
       success: true,
-      message: 'Inspección eliminada exitosamente'
-    } as ApiResponse<null>;
+      data: updated,
+      message: 'Inspección anulada sin eliminar su historial'
+    } as ApiResponse;
   } catch (error: any) {
-    console.error('Delete inspeccion error:', error);
+    console.error('Anular inspeccion error:', error);
     return {
       success: false,
       error: error.message || 'Error interno del servidor'
     } as ApiResponse;
   }
 });
+
+inspeccionesRoutes.delete('/:id', () => ({
+  success: false,
+  error: 'Las inspecciones no se eliminan; usa una anulación con motivo'
+} as ApiResponse));
 
 export default inspeccionesRoutes;

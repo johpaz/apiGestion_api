@@ -23,6 +23,65 @@ enum EstadoColmena {
   activa
   inactiva
   abandonada
+  destruida
+}
+
+enum EstadoNucleo {
+  en_formacion
+  en_desarrollo
+  listo
+  convertido
+  vendido
+  destruido
+  anulado
+}
+
+enum OrigenReina {
+  criada
+  comprada
+  capturada
+  desconocida
+}
+
+enum EstadoCasoSanitario {
+  abierto
+  en_seguimiento
+  cerrado_recuperado
+  cerrado_sacrificio
+  anulado
+}
+
+enum GravedadCasoSanitario {
+  baja
+  media
+  alta
+  critica
+}
+
+enum TipoAccionSanitaria {
+  aislamiento
+  toma_muestra
+  diagnostico
+  notificacion_ica
+  control_fisico
+  control_biologico
+  control_autorizado_ica
+  limpieza_desinfeccion
+  seguimiento
+  recuperacion
+  sacrificio_destruccion
+  disposicion_final
+}
+
+enum TipoEventoNucleo {
+  creado
+  actualizado
+  cambio_estado
+  traslado
+  convertido
+  vendido
+  destruido
+  anulado
 }
 
 enum TipoProducto {
@@ -35,17 +94,48 @@ enum TipoProducto {
 }
 
 enum CategoriaInsumo {
+  cajas_colmena
+  cajas_nucleo
   marcos
   alzas
   techos
+  bases
   pisos
   excluidores_reina
   alimentadores
   tratamientos
   equipos_proteccion
   herramientas
+  equipos_extraccion
+  envases
+  alimentacion
+  cria_reinas
+  sanidad_bioseguridad
+  medicion
+  transporte
+  procesamiento_cera
+  procesamiento_polen
+  procesamiento_propoleo
   materiales_construccion
   otros
+}
+
+enum TipoItemInventario {
+  insumo
+  activo
+}
+
+enum EstadoActivoInventario {
+  disponible
+  en_uso
+  mantenimiento
+  retirado
+}
+
+enum TipoMovimientoInventario {
+  entrada
+  salida
+  ajuste
 }
 
 enum EstadoStock {
@@ -65,6 +155,12 @@ enum EstadoSanidad {
 enum TipoTransaccion {
   ingreso
   egreso
+}
+
+enum EstadoPago {
+  pagado
+  parcial
+  pendiente
 }
 
 enum EstadoEnjambre {
@@ -106,290 +202,556 @@ enum PrioridadAlerta {
 }
 
 model Usuario {
-  id                String   @id @default(cuid())
-  nombre            String
-  email             String   @unique
-  password          String
-  rol               Rol      @default(apicultor)
-  activo            Boolean  @default(true)
-  moneda            Moneda   @default(COP)
-  imagenPerfil      String?
-  colmenasAsignadas String[]
-  fechaRegistro     DateTime @default(now())
-  ultimoAcceso      DateTime?
-  alertasActivadas     Boolean @default(true)
-  notificacionesEmail  Boolean @default(true)
-  idioma               String  @default("es")
+  id                  String    @id @default(cuid())
+  nombre              String
+  email               String    @unique
+  password            String
+  rol                 Rol       @default(apicultor)
+  activo              Boolean   @default(true)
+  moneda              Moneda    @default(COP)
+  imagenPerfil        String?
+  colmenasAsignadas   String[]
+  fechaRegistro       DateTime  @default(now())
+  ultimoAcceso        DateTime?
+  alertasActivadas    Boolean   @default(true)
+  notificacionesEmail Boolean   @default(true)
+  idioma              String    @default("es")
 
   // Relaciones
-  colmenas         Colmena[]
-  apiarios         Apiario[]
-  inspecciones     Inspeccion[]
-  transacciones    Transaccion[]
-  productos        Producto[]
-  alertas          Alerta[]
-  insumosApicola   InsumoApicola[]
-  producciones     Produccion[]
-  actividades      Actividad[]
+  colmenas       Colmena[]
+  apiarios       Apiario[]
+  inspecciones   Inspeccion[]
+  transacciones  Transaccion[]
+  productos      Producto[]
+  alertas        Alerta[]
+  insumosApicola InsumoApicola[]
+  producciones   Produccion[]
+  actividades    Actividad[]
 
   @@map("usuarios")
 }
 
+model ConfiguracionSistema {
+  id                 String   @id @default("principal")
+  appName            String   @default("ApiColmena Pro")
+  maintenanceMode    Boolean  @default(false)
+  allowRegistration  Boolean  @default(true)
+  defaultLanguage    String   @default("es")
+  defaultCurrency    Moneda   @default(COP)
+  timezone           String   @default("America/Bogota")
+  dateFormat         String   @default("DD/MM/YYYY")
+  emailNotifications Boolean  @default(true)
+  pushNotifications  Boolean  @default(true)
+  maintenanceAlerts  Boolean  @default(true)
+  updatedAt          DateTime @updatedAt
+  updatedBy          String?
+
+  @@map("configuracion_sistema")
+}
+
 model Apiario {
-  id              String   @id @default(cuid())
-  nombre          String
-  ciudad          String
-  pais            String
-  direccion       String
-  comoLlegar      String?
-  imagenApiario   String?
-  fechaCreacion   DateTime @default(now())
-  fechaActualizacion DateTime @updatedAt
+  id                       String    @id @default(cuid())
+  nombre                   String
+  ciudad                   String
+  pais                     String
+  direccion                String
+  comoLlegar               String?
+  imagenApiario            String?
+  registroIcaNumero        String?
+  registroIcaExpedidoEn    DateTime?
+  registroIcaVenceEn       DateTime?
+  registroIcaDocumentoPath String?
+  fechaCreacion            DateTime  @default(now())
+  fechaActualizacion       DateTime  @updatedAt
 
   // Relaciones
   usuarioId       String
-  usuario         Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  usuario         Usuario         @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
   colmenas        Colmena[]
   producciones    Produccion[]
+  nucleos         Nucleo[]
+  casosSanitarios CasoSanitario[]
 
   @@map("apiarios")
 }
 
 model Colmena {
-   id              String   @id @default(cuid())
-    nombre          String
-    estado          EstadoColmena @default(activa)
-    fechaInstalacion DateTime @default(now())
-    fechaCreacion   DateTime @default(now())
-    fechaActualizacion DateTime @updatedAt
-    cuadros             Int?
-    reyna               Boolean?
-    tipoReyna           String?
-    fechaReyna          DateTime?
+  id                 String        @id @default(cuid())
+  nombre             String
+  estado             EstadoColmena @default(activa)
+  fechaInstalacion   DateTime      @default(now())
+  fechaCreacion      DateTime      @default(now())
+  fechaActualizacion DateTime      @updatedAt
+  cuadros            Int?
+  reyna              Boolean?
+  tipoReyna          String?
+  fechaReyna         DateTime?
 
-   // Campos para alertas recurrentes
-   alertasRecurrentesActivadas Boolean @default(true)
-   ultimaAlertaControl        DateTime?
+  // Campos para alertas recurrentes
+  alertasRecurrentesActivadas Boolean   @default(true)
+  ultimaAlertaControl         DateTime?
 
-   // Relaciones
-   usuarioId       String
-   usuario         Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
-   apiarioId       String
-   apiario         Apiario @relation(fields: [apiarioId], references: [id], onDelete: Cascade)
-   nucleos         Nucleo[]
-   enjambres       Enjambre[]
-   inspecciones    Inspeccion[] @relation("ColmenaToInspeccion")
-   producciones    Produccion[]
+  // Relaciones
+  usuarioId        String
+  usuario          Usuario                 @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  apiarioId        String
+  apiario          Apiario                 @relation(fields: [apiarioId], references: [id], onDelete: Cascade)
+  nucleosOrigen    Nucleo[]                @relation("ColmenaOrigenNucleo")
+  nucleosDonados   NucleoDonante[]
+  conversionNucleo ConversionNucleo?
+  casosSanitarios  CasoSanitarioObjetivo[]
+  enjambres        Enjambre[]
+  inspecciones     Inspeccion[]            @relation("ColmenaToInspeccion")
+  producciones     Produccion[]
 
-   @@map("colmenas")
+  @@map("colmenas")
 }
 
 model Nucleo {
-  id              String   @id @default(cuid())
-  numero          Int
-  tipo            String   // Langstroth, Dadant, etc.
-  estado          String   // Bueno, Deteriorado, Nuevo
-  fechaInstalacion DateTime @default(now())
-  fechaCreacion   DateTime @default(now())
-  fechaActualizacion DateTime @updatedAt
+  id                 String       @id @default(cuid())
+  numero             Int
+  tipo               String // Langstroth, Dadant, etc.
+  codigo             String
+  estado             EstadoNucleo @default(en_formacion)
+  fechaInstalacion   DateTime     @default(now())
+  fechaFormacion     DateTime     @default(now())
+  origenReina        OrigenReina  @default(desconocida)
+  detalleOrigenReina String?
+  proveedorReina     String?
+  fechaCreacion      DateTime     @default(now())
+  fechaActualizacion DateTime     @updatedAt
 
   // Campos para alertas recurrentes
-  alertasRecurrentesActivadas Boolean @default(true)
-  ultimaAlertaControl        DateTime?
+  alertasRecurrentesActivadas Boolean   @default(true)
+  ultimaAlertaControl         DateTime?
 
   // Relaciones
-  colmenaId       String
-  colmena         Colmena @relation(fields: [colmenaId], references: [id], onDelete: Cascade)
-  inspecciones    Inspeccion[] @relation("NucleoToInspeccion")
+  apiarioId       String
+  apiario         Apiario                 @relation(fields: [apiarioId], references: [id], onDelete: Restrict)
+  colmenaOrigenId String?
+  colmenaOrigen   Colmena?                @relation("ColmenaOrigenNucleo", fields: [colmenaOrigenId], references: [id], onDelete: SetNull)
+  donantes        NucleoDonante[]
+  eventos         EventoNucleo[]
+  ventas          VentaNucleo[]
+  conversiones    ConversionNucleo[]
+  casosSanitarios CasoSanitarioObjetivo[]
+  inspecciones    Inspeccion[]            @relation("NucleoToInspeccion")
 
+  @@unique([apiarioId, codigo])
   @@map("nucleos")
 }
 
+model NucleoDonante {
+  id          String   @id @default(cuid())
+  nucleoId    String
+  nucleo      Nucleo   @relation(fields: [nucleoId], references: [id], onDelete: Cascade)
+  colmenaId   String
+  colmena     Colmena  @relation(fields: [colmenaId], references: [id], onDelete: Restrict)
+  descripcion String?
+  fecha       DateTime @default(now())
+
+  @@unique([nucleoId, colmenaId])
+  @@map("nucleos_donantes")
+}
+
+model EventoNucleo {
+  id              String           @id @default(cuid())
+  nucleoId        String
+  nucleo          Nucleo           @relation(fields: [nucleoId], references: [id], onDelete: Cascade)
+  tipo            TipoEventoNucleo
+  detalle         String
+  datos           Json?
+  fecha           DateTime         @default(now())
+  registradoPorId String
+  anuladoAt       DateTime?
+  anuladoPorId    String?
+  motivoAnulacion String?
+
+  @@index([nucleoId, fecha])
+  @@map("eventos_nucleo")
+}
+
+model VentaNucleo {
+  id                      String      @id @default(cuid())
+  nucleoId                String
+  nucleo                  Nucleo      @relation(fields: [nucleoId], references: [id], onDelete: Restrict)
+  compradorNombre         String
+  compradorIdentificacion String?
+  compradorContacto       String?
+  destinoApiario          String
+  destinoCiudad           String?
+  fecha                   DateTime
+  monto                   Float
+  moneda                  Moneda
+  comprobantePath         String?
+  transaccionId           String      @unique
+  transaccion             Transaccion @relation(fields: [transaccionId], references: [id], onDelete: Restrict)
+  creadoPorId             String
+  fechaCreacion           DateTime    @default(now())
+  anuladoAt               DateTime?
+  anuladoPorId            String?
+  motivoAnulacion         String?
+
+  @@index([nucleoId, fecha])
+  @@map("ventas_nucleo")
+}
+
+model ConversionNucleo {
+  id              String    @id @default(cuid())
+  nucleoId        String
+  nucleo          Nucleo    @relation(fields: [nucleoId], references: [id], onDelete: Restrict)
+  colmenaId       String    @unique
+  colmena         Colmena   @relation(fields: [colmenaId], references: [id], onDelete: Restrict)
+  fecha           DateTime
+  observaciones   String?
+  creadoPorId     String
+  fechaCreacion   DateTime  @default(now())
+  anuladoAt       DateTime?
+  anuladoPorId    String?
+  motivoAnulacion String?
+
+  @@index([nucleoId, fecha])
+  @@map("conversiones_nucleo")
+}
+
 model Enjambre {
-   id              String   @id @default(cuid())
-   nombre          String
-   estado          EstadoEnjambre @default(activo)
-   fechaCreacion   DateTime @default(now())
-   fechaActualizacion DateTime @updatedAt
-   notas           String?
+  id                 String         @id @default(cuid())
+  nombre             String
+  estado             EstadoEnjambre @default(activo)
+  fechaCreacion      DateTime       @default(now())
+  fechaActualizacion DateTime       @updatedAt
+  notas              String?
 
-   // Campos para alertas recurrentes
-   alertasRecurrentesActivadas Boolean @default(true)
-   ultimaAlertaControl        DateTime?
+  // Campos para alertas recurrentes
+  alertasRecurrentesActivadas Boolean   @default(true)
+  ultimaAlertaControl         DateTime?
 
-   // Relaciones
-   colmenaId       String
-   colmena         Colmena @relation(fields: [colmenaId], references: [id], onDelete: Cascade)
-   inspecciones    Inspeccion[] @relation("EnjambreToInspeccion")
+  // Relaciones
+  colmenaId       String
+  colmena         Colmena                 @relation(fields: [colmenaId], references: [id], onDelete: Cascade)
+  inspecciones    Inspeccion[]            @relation("EnjambreToInspeccion")
+  casosSanitarios CasoSanitarioObjetivo[]
 
-   @@map("enjambres")
+  @@map("enjambres")
 }
 
 model Inspeccion {
-  id              String   @id @default(cuid())
-  fecha           DateTime @default(now())
-  estadoSanidad   EstadoSanidad @default(saludable)
-  observaciones   String?
+  id                   String        @id @default(cuid())
+  fecha                DateTime      @default(now())
+  estadoSanidad        EstadoSanidad @default(saludable)
+  observaciones        String?
   posiblesEnfermedades String[]
-  patologiasApicolas String[]
+  patologiasApicolas   String[]
   numColmenasAfectadas Int?
-  signosClinicos String[]
-  fechaCreacion   DateTime @default(now())
-  fechaActualizacion DateTime @updatedAt
+  signosClinicos       String[]
+  proximaRevision      DateTime?
+  anuladoAt            DateTime?
+  anuladoPorId         String?
+  motivoAnulacion      String?
+  fechaCreacion        DateTime      @default(now())
+  fechaActualizacion   DateTime      @updatedAt
 
   // Relaciones
-  colmenas        Colmena[] @relation("ColmenaToInspeccion")
+  colmenas        Colmena[]       @relation("ColmenaToInspeccion")
   usuarioId       String
-  usuario         Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  usuario         Usuario         @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
   nucleoIds       String[]
-  nucleos         Nucleo[] @relation("NucleoToInspeccion")
-  enjambres       Enjambre[] @relation("EnjambreToInspeccion")
+  nucleos         Nucleo[]        @relation("NucleoToInspeccion")
+  enjambres       Enjambre[]      @relation("EnjambreToInspeccion")
+  casosSanitarios CasoSanitario[]
 
   @@map("inspecciones")
 }
 
 model Producto {
-  id              String   @id @default(cuid())
-  nombre          String
-  tipo            TipoProducto
-  cantidad        Float
-  unidad          String   // kg, litros, etc.
-  precioUnitario  Float?
-  fechaProduccion DateTime?
-  fechaVencimiento DateTime?
-  lote            String?
-  notas           String?
-  fechaCreacion   DateTime @default(now())
-  fechaActualizacion DateTime @updatedAt
+  id                 String       @id @default(cuid())
+  nombre             String
+  tipo               TipoProducto
+  cantidad           Float
+  unidad             String // kg, litros, etc.
+  precioUnitario     Float?
+  fechaProduccion    DateTime?
+  fechaVencimiento   DateTime?
+  lote               String?
+  notas              String?
+  fechaCreacion      DateTime     @default(now())
+  fechaActualizacion DateTime     @updatedAt
 
   // Relaciones
-  usuarioId       String
-  usuario         Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  usuarioId String
+  usuario   Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
 
   @@map("productos")
 }
 
 model Transaccion {
-  id              String   @id @default(cuid())
-  tipo            TipoTransaccion
-  descripcion     String
-  monto           Float
-  fecha           DateTime @default(now())
-  categoria       String?  // Ventas, Compras, Gastos, etc.
-  referencia      String?  // Número de factura, recibo, etc.
-  fechaCreacion   DateTime @default(now())
-  fechaActualizacion DateTime @updatedAt
+  id                 String          @id @default(cuid())
+  tipo               TipoTransaccion
+  descripcion        String
+  monto              Float
+  fecha              DateTime        @default(now())
+  categoria          String? // Ventas, Compras, Gastos, etc.
+  referencia         String? // Número de factura, recibo, etc.
+  esVenta            Boolean         @default(false)
+  producto           String?
+  cantidad           Float?
+  unidad             String?
+  compradorNombre    String?
+  valorTotal         Float?
+  estadoPago         EstadoPago?
+  medioPago          String?
+  observaciones      String?
+  origen             String          @default("manual")
+  fechaCreacion      DateTime        @default(now())
+  fechaActualizacion DateTime        @updatedAt
+  anuladoAt          DateTime?
+  anuladoPorId       String?
+  motivoAnulacion    String?
 
   // Relaciones
-  usuarioId       String
-  usuario         Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  usuarioId   String
+  usuario     Usuario      @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  ventaNucleo VentaNucleo?
 
+  @@index([usuarioId, fecha])
+  @@index([usuarioId, esVenta, estadoPago])
   @@map("transacciones")
 }
 
+model PatologiaSanitaria {
+  id                     String          @id @default(cuid())
+  codigo                 String          @unique
+  nombre                 String
+  agente                 String?
+  declaracionObligatoria Boolean         @default(false)
+  activa                 Boolean         @default(true)
+  casos                  CasoSanitario[]
+
+  @@map("patologias_sanitarias")
+}
+
+model CasoSanitario {
+  id                      String                  @id @default(cuid())
+  codigo                  String                  @unique
+  titulo                  String
+  descripcion             String?
+  estado                  EstadoCasoSanitario     @default(abierto)
+  gravedad                GravedadCasoSanitario   @default(media)
+  fechaApertura           DateTime                @default(now())
+  proximaRevision         DateTime?
+  fechaCierre             DateTime?
+  requiereNotificacionIca Boolean                 @default(false)
+  apiarioId               String
+  apiario                 Apiario                 @relation(fields: [apiarioId], references: [id], onDelete: Restrict)
+  usuarioId               String
+  inspeccionOrigenId      String?
+  inspeccionOrigen        Inspeccion?             @relation(fields: [inspeccionOrigenId], references: [id], onDelete: SetNull)
+  patologiaId             String?
+  patologia               PatologiaSanitaria?     @relation(fields: [patologiaId], references: [id], onDelete: SetNull)
+  objetivos               CasoSanitarioObjetivo[]
+  acciones                AccionSanitaria[]
+  fechaCreacion           DateTime                @default(now())
+  fechaActualizacion      DateTime                @updatedAt
+  anuladoAt               DateTime?
+  anuladoPorId            String?
+  motivoAnulacion         String?
+
+  @@index([usuarioId, estado])
+  @@index([apiarioId, fechaApertura])
+  @@map("casos_sanitarios")
+}
+
+model CasoSanitarioObjetivo {
+  id         String        @id @default(cuid())
+  casoId     String
+  caso       CasoSanitario @relation(fields: [casoId], references: [id], onDelete: Cascade)
+  colmenaId  String?
+  colmena    Colmena?      @relation(fields: [colmenaId], references: [id], onDelete: Restrict)
+  nucleoId   String?
+  nucleo     Nucleo?       @relation(fields: [nucleoId], references: [id], onDelete: Restrict)
+  enjambreId String?
+  enjambre   Enjambre?     @relation(fields: [enjambreId], references: [id], onDelete: Restrict)
+
+  @@index([casoId])
+  @@index([colmenaId])
+  @@index([nucleoId])
+  @@map("casos_sanitarios_objetivos")
+}
+
+model AccionSanitaria {
+  id                  String              @id @default(cuid())
+  casoId              String
+  caso                CasoSanitario       @relation(fields: [casoId], references: [id], onDelete: Cascade)
+  tipo                TipoAccionSanitaria
+  fecha               DateTime            @default(now())
+  descripcion         String
+  objetivoIds         String[]
+  responsable         String?
+  metodo              String?
+  disposicionFinal    String?
+  productoNombre      String?
+  productoRegistroIca String?
+  retiroHasta         DateTime?
+  referenciaIca       String?
+  evidencias          String[]
+  registradoPorId     String
+  fechaCreacion       DateTime            @default(now())
+  anuladoAt           DateTime?
+  anuladoPorId        String?
+  motivoAnulacion     String?
+
+  @@index([casoId, fecha])
+  @@map("acciones_sanitarias")
+}
+
 model Alerta {
-  id              String   @id @default(cuid())
-  titulo          String
-  mensaje         String
-  tipo            TipoAlerta
-  prioridad       PrioridadAlerta
-  leida           Boolean  @default(false)
-  fechaCreacion   DateTime @default(now())
-  fechaActualizacion DateTime @updatedAt
+  id                 String          @id @default(cuid())
+  titulo             String
+  mensaje            String
+  tipo               TipoAlerta
+  prioridad          PrioridadAlerta
+  leida              Boolean         @default(false)
+  fechaCreacion      DateTime        @default(now())
+  fechaActualizacion DateTime        @updatedAt
 
   // Campos para alertas recurrentes
-  esRecurrente      Boolean?  @default(false)
-  frecuenciaDias    Int?
-  entidadTipo       String?
-  entidadId         String?
-  ultimaEjecucion   DateTime?
-  proximaEjecucion  DateTime?
-  activa            Boolean   @default(true)
+  esRecurrente     Boolean?  @default(false)
+  frecuenciaDias   Int?
+  entidadTipo      String?
+  entidadId        String?
+  ultimaEjecucion  DateTime?
+  proximaEjecucion DateTime?
+  activa           Boolean   @default(true)
 
   // Relaciones
-  usuarioId       String
-  usuario         Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  usuarioId String
+  usuario   Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
 
   @@map("alertas")
 }
 
 model ExchangeRate {
-  id              String   @id @default(cuid())
-  fromCurrency    Moneda
-  toCurrency      Moneda
-  rate            Float
-  lastUpdated     DateTime @default(now())
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id           String   @id @default(cuid())
+  fromCurrency Moneda
+  toCurrency   Moneda
+  rate         Float
+  lastUpdated  DateTime @default(now())
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   @@unique([fromCurrency, toCurrency])
   @@map("exchange_rates")
 }
 
 model InsumoApicola {
-  id              String   @id @default(cuid())
-  nombre          String
-  categoria       CategoriaInsumo
-  descripcion     String?
-  cantidadActual  Float
-  cantidadMinima  Float
-  unidad          String   // unidades, kg, litros, etc.
-  precioUnitario  Float?
-  ubicacion       String?  // Almacén A, Almacén B, etc.
-  estadoStock     EstadoStock @default(stock_bueno)
-  porcentajeStock Float?  // Porcentaje del stock actual vs mínimo
-  fechaCaducidad  DateTime?
-  lote            String?
-  proveedor       String?
-  notas           String?
-  fechaCreacion   DateTime @default(now())
-  fechaActualizacion DateTime @updatedAt
+  id                 String                  @id @default(cuid())
+  nombre             String
+  categoria          CategoriaInsumo
+  tipoItem           TipoItemInventario      @default(insumo)
+  estadoActivo       EstadoActivoInventario?
+  codigoInterno      String?
+  catalogoItemId     String?
+  catalogoItem       CatalogoItemInventario? @relation(fields: [catalogoItemId], references: [id], onDelete: Restrict)
+  descripcion        String?
+  cantidadActual     Float
+  cantidadMinima     Float
+  unidad             String // unidades, kg, litros, etc.
+  precioUnitario     Float?
+  valorMercado       Float?
+  ubicacion          String? // Almacén A, Almacén B, etc.
+  estadoStock        EstadoStock             @default(stock_bueno)
+  porcentajeStock    Float? // Porcentaje del stock actual vs mínimo
+  fechaCaducidad     DateTime?
+  lote               String?
+  proveedor          String?
+  notas              String?
+  anuladoAt          DateTime?
+  anuladoPorId       String?
+  motivoAnulacion    String?
+  fechaCreacion      DateTime                @default(now())
+  fechaActualizacion DateTime                @updatedAt
 
   // Relaciones
-  usuarioId       String
-  usuario         Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  usuarioId   String
+  usuario     Usuario                @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  movimientos MovimientoInventario[]
 
+  @@index([usuarioId, tipoItem])
+  @@index([catalogoItemId])
   @@map("insumos_apicola")
 }
 
+model CatalogoItemInventario {
+  id          String             @id
+  codigo      String             @unique
+  nombre      String
+  descripcion String?
+  categoria   CategoriaInsumo
+  tipoItem    TipoItemInventario
+  unidad      String
+  grupo       String             @default("Otros")
+  icono       String             @default("package")
+  activo      Boolean            @default(true)
+  items       InsumoApicola[]
+
+  @@index([tipoItem, categoria])
+  @@map("catalogo_items_inventario")
+}
+
+model MovimientoInventario {
+  id               String                   @id @default(cuid())
+  insumoId         String
+  insumo           InsumoApicola            @relation(fields: [insumoId], references: [id], onDelete: Restrict)
+  tipo             TipoMovimientoInventario
+  cantidad         Float
+  cantidadAnterior Float
+  cantidadNueva    Float
+  motivo           String
+  registradoPorId  String
+  fecha            DateTime                 @default(now())
+
+  @@index([insumoId, fecha])
+  @@map("movimientos_inventario")
+}
+
 model Produccion {
-  id              String   @id @default(cuid())
-  fecha           DateTime
-  tipoProducto    TipoProducto
-  cantidad        Float
-  unidad          String
-  calidad         String?
-  lote            String?
-  destino         String?
-  observaciones   String?
-  fechaCreacion   DateTime @default(now())
-  fechaActualizacion DateTime @updatedAt
+  id                 String       @id @default(cuid())
+  fecha              DateTime
+  tipoProducto       TipoProducto
+  cantidad           Float
+  unidad             String
+  calidad            String?
+  lote               String?
+  destino            String?
+  observaciones      String?
+  fechaCreacion      DateTime     @default(now())
+  fechaActualizacion DateTime     @updatedAt
 
   // Relaciones
-  usuarioId       String
-  usuario         Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
-  colmenaId       String
-  colmena         Colmena @relation(fields: [colmenaId], references: [id], onDelete: Cascade)
-  apiarioId       String
-  apiario         Apiario @relation(fields: [apiarioId], references: [id], onDelete: Cascade)
+  usuarioId String
+  usuario   Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  colmenaId String
+  colmena   Colmena @relation(fields: [colmenaId], references: [id], onDelete: Cascade)
+  apiarioId String
+  apiario   Apiario @relation(fields: [apiarioId], references: [id], onDelete: Cascade)
 
   @@map("producciones")
 }
 
 model Actividad {
-  id              String   @id @default(cuid())
-  tipo            TipoActividad
-  titulo          String
-  descripcion     String
-  entidadTipo     String?  // 'colmena', 'apiario', 'inspeccion', etc.
-  entidadId       String?  // ID de la entidad relacionada
-  entidadNombre   String?  // Nombre de la entidad (colmena, apiario, etc.)
-  estado          String   @default("success") // 'success', 'warning', 'error'
-  fechaCreacion   DateTime @default(now())
+  id            String        @id @default(cuid())
+  tipo          TipoActividad
+  titulo        String
+  descripcion   String
+  entidadTipo   String? // 'colmena', 'apiario', 'inspeccion', etc.
+  entidadId     String? // ID de la entidad relacionada
+  entidadNombre String? // Nombre de la entidad (colmena, apiario, etc.)
+  estado        String        @default("success") // 'success', 'warning', 'error'
+  fechaCreacion DateTime      @default(now())
 
   // Relaciones
-  usuarioId       String
-  usuario         Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  usuarioId String
+  usuario   Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
 
   @@map("actividades")
 }

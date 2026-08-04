@@ -11,7 +11,11 @@ const createApiarioSchema = z.object({
   pais: z.string().min(1, 'País es requerido'),
   direccion: z.string().min(1, 'Dirección es requerida'),
   comoLlegar: z.string().optional(),
-  imagenApiario: z.string().optional()
+  imagenApiario: z.string().optional(),
+  registroIcaNumero: z.string().trim().max(120).optional(),
+  registroIcaExpedidoEn: z.string().datetime().optional(),
+  registroIcaVenceEn: z.string().datetime().optional(),
+  registroIcaDocumentoPath: z.string().url().optional()
 });
 
 const updateApiarioSchema = z.object({
@@ -20,7 +24,11 @@ const updateApiarioSchema = z.object({
   pais: z.string().min(1, 'País es requerido').optional(),
   direccion: z.string().min(1, 'Dirección es requerida').optional(),
   comoLlegar: z.string().optional(),
-  imagenApiario: z.string().optional()
+  imagenApiario: z.string().optional(),
+  registroIcaNumero: z.string().trim().max(120).optional(),
+  registroIcaExpedidoEn: z.string().datetime().nullable().optional(),
+  registroIcaVenceEn: z.string().datetime().nullable().optional(),
+  registroIcaDocumentoPath: z.string().url().nullable().optional()
 });
 
 const apiariosRoutes = new Elysia({ prefix: '/apiarios' });
@@ -152,6 +160,8 @@ apiariosRoutes.post('/', async ({ body, headers }) => {
     const newApiario = await prisma.apiario.create({
       data: {
         ...validatedData,
+        registroIcaExpedidoEn: validatedData.registroIcaExpedidoEn ? new Date(validatedData.registroIcaExpedidoEn) : undefined,
+        registroIcaVenceEn: validatedData.registroIcaVenceEn ? new Date(validatedData.registroIcaVenceEn) : undefined,
         usuarioId: userId
       }
     });
@@ -206,9 +216,14 @@ apiariosRoutes.put('/:id', async ({ params, body, headers }) => {
 
     const validatedData = updateApiarioSchema.parse(body);
 
+    const { registroIcaExpedidoEn, registroIcaVenceEn, ...rest } = validatedData;
     const updatedApiario = await prisma.apiario.update({
       where: { id: id },
-      data: validatedData
+      data: {
+        ...rest,
+        registroIcaExpedidoEn: registroIcaExpedidoEn === null ? null : registroIcaExpedidoEn ? new Date(registroIcaExpedidoEn) : undefined,
+        registroIcaVenceEn: registroIcaVenceEn === null ? null : registroIcaVenceEn ? new Date(registroIcaVenceEn) : undefined,
+      }
     });
 
     return {
