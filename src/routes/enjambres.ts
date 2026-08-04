@@ -32,11 +32,22 @@ enjambresRoutes.post('/', async (context: any) => {
     const userId = context.user?.id;
     const enjambreData = context.body;
 
+    const colmena = await prisma.colmena.findFirst({
+      where: { id: enjambreData.colmenaId, usuarioId: userId },
+      select: { id: true }
+    });
+
+    if (!colmena) {
+      context.set.status = 404;
+      return { success: false, error: 'Colmena no encontrada' } as ApiResponse;
+    }
+
     const newEnjambre = await prisma.enjambre.create({
       data: {
         nombre: enjambreData.nombre,
         estado: 'activo',
-        colmenaId: enjambreData.colmenaId
+        notas: enjambreData.notas || null,
+        colmenaId: colmena.id
       }
     });
 
@@ -78,7 +89,8 @@ enjambresRoutes.put('/:id', async (context: any) => {
       },
       data: {
         nombre: enjambreData.nombre,
-        estado: enjambreData.estado
+        estado: enjambreData.estado,
+        notas: enjambreData.notas
       }
     });
 
@@ -98,6 +110,35 @@ enjambresRoutes.put('/:id', async (context: any) => {
   } catch (error: any) {
     console.error('Update enjambre error:', error);
     throw new Error(error.message || 'Error interno del servidor');
+  }
+});
+
+// Logical removal: swarm records are retained for productive and sanitary traceability.
+enjambresRoutes.delete('/:id', async (context: any) => {
+  try {
+    const { id } = context.params;
+    const userId = context.user?.id;
+
+    const updatedEnjambre = await prisma.enjambre.updateMany({
+      where: { id, colmena: { usuarioId: userId } },
+      data: { estado: 'inactivo', alertasRecurrentesActivadas: false }
+    });
+
+    if (updatedEnjambre.count === 0) {
+      context.set.status = 404;
+      return { success: false, error: 'Enjambre no encontrado' } as ApiResponse;
+    }
+
+    const enjambre = await prisma.enjambre.findUnique({ where: { id } });
+    return {
+      success: true,
+      data: enjambre,
+      message: 'Enjambre dado de baja; su trazabilidad se conserva'
+    } as unknown as ApiResponse<Enjambre>;
+  } catch (error: any) {
+    console.error('Delete enjambre error:', error);
+    context.set.status = 500;
+    return { success: false, error: 'Error interno del servidor' } as ApiResponse;
   }
 });
 
