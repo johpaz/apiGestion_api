@@ -3,7 +3,7 @@ import jwt from 'jsonwebtoken';
 import { ApiResponse, AuthResponse, LoginRequest, RegisterRequest, Usuario } from '../types/apicola';
 import { auth as firebaseAuth } from '../firebase';
 import logger from '../utils/logger';
-import prisma from '../prisma/client';
+import { sql, insert, updateById } from '../db';
 import { authenticateToken } from '../middleware/auth';
 
 // Función para hashear contraseñas usando Bun.password
@@ -24,12 +24,7 @@ authRoutes.post('/login', async ({ body }) => {
     const { email, password }: LoginRequest = body as LoginRequest;
 
     // Find user in database
-    const user = await prisma.usuario.findUnique({
-      where: {
-        email: email,
-        activo: true
-      }
-    });
+    const [user] = await sql`SELECT * FROM usuarios WHERE email = ${email} AND activo = true`;
 
     if (!user) {
       return {
@@ -60,10 +55,7 @@ authRoutes.post('/login', async ({ body }) => {
     }, jwtSecret);
 
     // Update last access in database
-    await prisma.usuario.update({
-      where: { id: user.id },
-      data: { ultimoAcceso: new Date() }
-    });
+    await updateById('usuarios', user.id, { ultimoAcceso: new Date() });
 
     const { password: _, ...userWithoutPassword } = user;
 
@@ -90,16 +82,14 @@ authRoutes.post('/register', async ({ body, set }) => {
   try {
     const { nombre, email, password }: RegisterRequest = body as RegisterRequest;
 
-    const systemSettings = await prisma.configuracionSistema.findUnique({ where: { id: 'principal' } });
+    const [systemSettings] = await sql`SELECT "allowRegistration" FROM configuracion_sistema WHERE id = 'principal'`;
     if (systemSettings && !systemSettings.allowRegistration) {
       set.status = 403;
       return { success: false, error: 'El registro de usuarios está deshabilitado' } as ApiResponse;
     }
 
     // Check if user already exists
-    const existingUser = await prisma.usuario.findUnique({
-      where: { email }
-    });
+    const [existingUser] = await sql`SELECT id FROM usuarios WHERE email = ${email}`;
     if (existingUser) {
       return {
         success: false,
@@ -111,16 +101,14 @@ authRoutes.post('/register', async ({ body, set }) => {
     const hashedPassword = await hashPassword(password);
 
     // Create new user in database
-    const newUser = await prisma.usuario.create({
-      data: {
-        nombre,
-        email,
-        password: hashedPassword,
-        rol: 'apicultor',
-        activo: true,
-        moneda: 'COP',
-        colmenasAsignadas: []
-      }
+    const newUser = await insert('usuarios', {
+      nombre,
+      email,
+      password: hashedPassword,
+      rol: 'apicultor',
+      activo: true,
+      moneda: 'COP',
+      colmenasAsignadas: []
     });
 
     // Generate JWT token
@@ -222,33 +210,27 @@ authRoutes.post('/google-callback', async ({ body, set }) => {
     }
 
     // Check if user exists in our system
-    let user = await prisma.usuario.findUnique({
-      where: {
-        email
-      }
-    });
+    let [user] = await sql`SELECT * FROM usuarios WHERE email = ${email}`;
     logger.info({ userExists: !!user, email }, 'Verificando existencia de usuario en base de datos');
 
     if (!user) {
-      const systemSettings = await prisma.configuracionSistema.findUnique({ where: { id: 'principal' } });
+      const [systemSettings] = await sql`SELECT "allowRegistration" FROM configuracion_sistema WHERE id = 'principal'`;
       if (systemSettings && !systemSettings.allowRegistration) {
         set.status = 403;
         return { success: false, error: 'El registro de usuarios está deshabilitado' } as ApiResponse;
       }
       // Create new user from Google OAuth
-      user = await prisma.usuario.create({
-        data: {
-          id: uid,
-          nombre: name || email.split('@')[0],
-          email,
-          password: '', // No password for OAuth users
-          rol: 'apicultor',
-          activo: true,
-          moneda: 'COP',
-          colmenasAsignadas: [],
-          fechaRegistro: new Date(),
-          ultimoAcceso: new Date()
-        }
+      user = await insert('usuarios', {
+        id: uid,
+        nombre: name || email.split('@')[0],
+        email,
+        password: '', // No password for OAuth users
+        rol: 'apicultor',
+        activo: true,
+        moneda: 'COP',
+        colmenasAsignadas: [],
+        fechaRegistro: new Date(),
+        ultimoAcceso: new Date()
       });
       logger.info({ userId: user.id, email: user.email }, 'Usuario creado exitosamente en base de datos');
     } else {
@@ -266,10 +248,7 @@ authRoutes.post('/google-callback', async ({ body, set }) => {
       if (name && name !== user.nombre) {
         updateData.nombre = name;
       }
-      user = await prisma.usuario.update({
-        where: { id: user.id },
-        data: updateData
-      });
+      user = await updateById('usuarios', user.id, updateData);
       logger.info({ userId: user.id, email: user.email }, 'Usuario existente actualizado en base de datos');
     }
 

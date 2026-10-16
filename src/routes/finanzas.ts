@@ -1,7 +1,7 @@
 import { Elysia } from 'elysia';
 import { z } from 'zod';
 import { authGuard } from '../middleware/auth';
-import prisma from '../prisma/client';
+import { sql, insert, updateById, type Row } from '../db';
 import { getPaymentStatus, validateFinancialAmounts } from '../services/financialPolicy';
 
 const financialSchema = z.object({
@@ -87,27 +87,29 @@ function toData(data: FinancialInput, date: Date) {
   };
 }
 
+// Transacciones con la marca de si provienen de una venta de núcleo (bloqueadas para edición)
+const withVenta = (rows: Row[]): Row[] => rows.map(({ ventaNucleoId, ...t }) => ({ ...t, ventaNucleo: ventaNucleoId ? { id: ventaNucleoId } : null }));
+const VENTA_ID = sql`(SELECT v.id FROM ventas_nucleo v WHERE v."transaccionId" = t.id) AS "ventaNucleoId"`;
+
 const routes = new Elysia({ prefix: '/finanzas' }).use(authGuard);
 
 routes.get('/', async (context: any) => {
-  const transactions = await prisma.transaccion.findMany({
-    where: { usuarioId: context.user.id, anuladoAt: null },
-    include: { ventaNucleo: { select: { id: true } } },
-    orderBy: [{ fecha: 'desc' }, { fechaCreacion: 'desc' }],
-  });
+  const transactions = withVenta(await sql`
+    SELECT t.*, ${VENTA_ID} FROM transacciones t
+    WHERE t."usuarioId" = ${context.user.id} AND t."anuladoAt" IS NULL
+    ORDER BY t.fecha DESC, t."fechaCreacion" DESC`);
   return { success: true, data: transactions.map(serialize) };
 });
 
 routes.get('/resumen', async (context: any) => {
-  const transactions = await prisma.transaccion.findMany({
-    where: { usuarioId: context.user.id, anuladoAt: null },
-    select: { tipo: true, monto: true, esVenta: true, valorTotal: true },
-  });
-  const ingresos = transactions.filter((item) => item.tipo === 'ingreso').reduce((sum, item) => sum + item.monto, 0);
-  const egresos = transactions.filter((item) => item.tipo === 'egreso').reduce((sum, item) => sum + item.monto, 0);
-  const sales = transactions.filter((item) => item.esVenta);
-  const totalVentas = sales.reduce((sum, item) => sum + (item.valorTotal ?? item.monto), 0);
-  const cobradoVentas = sales.reduce((sum, item) => sum + item.monto, 0);
+  const transactions = await sql`
+    SELECT tipo, monto, "esVenta", "valorTotal" FROM transacciones
+    WHERE "usuarioId" = ${context.user.id} AND "anuladoAt" IS NULL`;
+  const ingresos = transactions.filter((item: Row) => item.tipo === 'ingreso').reduce((sum: number, item: Row) => sum + item.monto, 0);
+  const egresos = transactions.filter((item: Row) => item.tipo === 'egreso').reduce((sum: number, item: Row) => sum + item.monto, 0);
+  const sales = transactions.filter((item: Row) => item.esVenta);
+  const totalVentas = sales.reduce((sum: number, item: Row) => sum + (item.valorTotal ?? item.monto), 0);
+  const cobradoVentas = sales.reduce((sum: number, item: Row) => sum + item.monto, 0);
   return {
     success: true,
     data: {
@@ -125,14 +127,10 @@ routes.get('/resumen', async (context: any) => {
 
 routes.get('/mensual', async (context: any) => {
   const year = new Date().getFullYear();
-  const transactions = await prisma.transaccion.findMany({
-    where: {
-      usuarioId: context.user.id,
-      anuladoAt: null,
-      fecha: { gte: new Date(`${year}-01-01T00:00:00.000Z`), lt: new Date(`${year + 1}-01-01T00:00:00.000Z`) },
-    },
-    select: { fecha: true, tipo: true, monto: true, esVenta: true, valorTotal: true },
-  });
+  const transactions = await sql`
+    SELECT fecha, tipo, monto, "esVenta", "valorTotal" FROM transacciones
+    WHERE "usuarioId" = ${context.user.id} AND "anuladoAt" IS NULL
+      AND fecha >= ${new Date(`${year}-01-01T00:00:00.000Z`)} AND fecha < ${new Date(`${year + 1}-01-01T00:00:00.000Z`)}`;
   const months = Array.from({ length: 12 }, (_, index) => ({ mes: index + 1, ingresos: 0, egresos: 0, ventas: 0, balance: 0 }));
   for (const item of transactions) {
     const month = months[item.fecha.getUTCMonth()];
@@ -149,44 +147,32 @@ routes.post('/', async (context: any) => {
   if (!parsed.success) return fail(context, 400, parsed.error.issues[0]?.message || 'Datos inválidos', parsed.error.flatten());
   const date = parseDate(parsed.data.fecha);
   if (!date) return fail(context, 400, 'La fecha no es válida');
-  const transaction = await prisma.transaccion.create({
-    data: { ...toData(parsed.data, date), usuarioId: context.user.id },
-    include: { ventaNucleo: { select: { id: true } } },
-  });
+  const transaction = await insert('transacciones', { ...toData(parsed.data, date), usuarioId: context.user.id });
   context.set.status = 201;
-  return { success: true, data: serialize(transaction), message: parsed.data.esVenta ? 'Venta registrada' : 'Movimiento registrado' };
+  return { success: true, data: serialize({ ...transaction, ventaNucleo: null }), message: parsed.data.esVenta ? 'Venta registrada' : 'Movimiento registrado' };
 });
 
 routes.put('/:id', async (context: any) => {
-  const existing = await prisma.transaccion.findFirst({
-    where: { id: context.params.id, usuarioId: context.user.id, anuladoAt: null },
-    include: { ventaNucleo: { select: { id: true } } },
-  });
+  const existing = withVenta(await sql`
+    SELECT t.*, ${VENTA_ID} FROM transacciones t
+    WHERE t.id = ${context.params.id} AND t."usuarioId" = ${context.user.id} AND t."anuladoAt" IS NULL LIMIT 1`)[0];
   if (!existing) return fail(context, 404, 'Registro no encontrado');
   if (existing.ventaNucleo) return fail(context, 409, 'Esta venta se gestiona desde Núcleos para conservar su trazabilidad');
   const parsed = financialSchema.safeParse(context.body);
   if (!parsed.success) return fail(context, 400, parsed.error.issues[0]?.message || 'Datos inválidos', parsed.error.flatten());
   const date = parseDate(parsed.data.fecha);
   if (!date) return fail(context, 400, 'La fecha no es válida');
-  const transaction = await prisma.transaccion.update({
-    where: { id: existing.id },
-    data: toData(parsed.data, date),
-    include: { ventaNucleo: { select: { id: true } } },
-  });
-  return { success: true, data: serialize(transaction), message: 'Registro actualizado' };
+  const transaction = await updateById('transacciones', existing.id, toData(parsed.data, date));
+  return { success: true, data: serialize({ ...transaction, ventaNucleo: null }), message: 'Registro actualizado' };
 });
 
 routes.delete('/:id', async (context: any) => {
-  const existing = await prisma.transaccion.findFirst({
-    where: { id: context.params.id, usuarioId: context.user.id, anuladoAt: null },
-    include: { ventaNucleo: { select: { id: true } } },
-  });
+  const existing = withVenta(await sql`
+    SELECT t.*, ${VENTA_ID} FROM transacciones t
+    WHERE t.id = ${context.params.id} AND t."usuarioId" = ${context.user.id} AND t."anuladoAt" IS NULL LIMIT 1`)[0];
   if (!existing) return fail(context, 404, 'Registro no encontrado');
   if (existing.ventaNucleo) return fail(context, 409, 'Anula esta venta desde Núcleos para conservar su trazabilidad');
-  await prisma.transaccion.update({
-    where: { id: existing.id },
-    data: { anuladoAt: new Date(), anuladoPorId: context.user.id, motivoAnulacion: 'Anulado desde ventas e ingresos' },
-  });
+  await updateById('transacciones', existing.id, { anuladoAt: new Date(), anuladoPorId: context.user.id, motivoAnulacion: 'Anulado desde ventas e ingresos' });
   return { success: true, message: 'Registro anulado; se conserva en el historial' };
 });
 

@@ -11,7 +11,7 @@ build
 
 # Docker
 Dockerfile
-docker-compose.yml
+docker-compose*.yml
 .dockerignore
 
 # Environment files (no copiar secrets)
@@ -30,9 +30,6 @@ logs
 # OS
 .DS_Store
 Thumbs.db
-
-# Prisma (no copiar migraciones en build, se ejecutan aparte)
-prisma/migrations
 
 # Tests
 tests

@@ -1,4 +1,4 @@
-import { TipoProducto } from '../generated/prisma/enums';
+import { TipoProducto } from '../db/enums';
 
 export interface Apiario {
   id: string;

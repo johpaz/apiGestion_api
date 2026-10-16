@@ -115,4 +115,7 @@ Thumbs.db
 # Build outputs
 dist/
 build/
-/src/generated/prisma
+
+# HiveDB local (Hive SDK)
+data/
+.hive-dev/

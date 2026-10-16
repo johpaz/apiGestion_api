@@ -1,7 +1,7 @@
 import { Elysia } from 'elysia';
 import { authGuard } from '../middleware/auth';
 import { requireRole } from '../middleware/authorization';
-import prisma from '../prisma/client';
+import { sql, upsert, type Row } from '../db';
 
 const SETTINGS_ID = 'principal';
 
@@ -39,41 +39,33 @@ adminRoutes.get('/dashboard', async (context: any) => {
     recentUsers,
     monthlyRows,
   ] = await Promise.all([
-    prisma.usuario.count(),
-    prisma.usuario.count({ where: { activo: true } }),
-    prisma.usuario.groupBy({ by: ['rol'], _count: { _all: true } }),
-    prisma.colmena.count(),
-    prisma.apiario.count(),
-    prisma.produccion.aggregate({ _sum: { cantidad: true } }),
-    prisma.transaccion.groupBy({ by: ['tipo'], where: { anuladoAt: null }, _sum: { monto: true } }),
-    prisma.alerta.count({ where: { leida: false, activa: true } }),
-    prisma.usuario.findMany({
-      orderBy: { fechaRegistro: 'desc' },
-      take: 5,
-      select: { id: true, nombre: true, email: true, rol: true, activo: true, fechaRegistro: true },
-    }),
-    prisma.produccion.findMany({
-      where: { fecha: { gte: since } },
-      select: { fecha: true, cantidad: true },
-      orderBy: { fecha: 'asc' },
-    }),
+    sql`SELECT count(*)::int AS n FROM usuarios`.then(r => r[0].n as number),
+    sql`SELECT count(*)::int AS n FROM usuarios WHERE activo = true`.then(r => r[0].n as number),
+    sql`SELECT rol, count(*)::int AS n FROM usuarios GROUP BY rol`,
+    sql`SELECT count(*)::int AS n FROM colmenas`.then(r => r[0].n as number),
+    sql`SELECT count(*)::int AS n FROM apiarios`.then(r => r[0].n as number),
+    sql`SELECT sum(cantidad)::float AS total FROM producciones`.then(r => ({ _sum: { cantidad: r[0].total as number | null } })),
+    sql`SELECT tipo, sum(monto)::float AS total FROM transacciones WHERE "anuladoAt" IS NULL GROUP BY tipo`,
+    sql`SELECT count(*)::int AS n FROM alertas WHERE leida = false AND activa = true`.then(r => r[0].n as number),
+    sql`SELECT id, nombre, email, rol, activo, "fechaRegistro" FROM usuarios ORDER BY "fechaRegistro" DESC LIMIT 5`,
+    sql`SELECT fecha, cantidad FROM producciones WHERE fecha >= ${since} ORDER BY fecha ASC`,
   ]);
 
-  const roles = { apicultor: 0, administrador: 0 };
-  for (const row of usersByRole) roles[row.rol] = row._count._all;
+  const roles: Record<string, number> = { apicultor: 0, administrador: 0 };
+  for (const row of usersByRole) roles[row.rol] = row.n;
 
   const finances = { ingresos: 0, egresos: 0 };
-  for (const row of transactions) {
-    if (row.tipo === 'ingreso') finances.ingresos = row._sum.monto ?? 0;
-    if (row.tipo === 'egreso') finances.egresos = row._sum.monto ?? 0;
+  for (const row of transactions as Row[]) {
+    if (row.tipo === 'ingreso') finances.ingresos = row.total ?? 0;
+    if (row.tipo === 'egreso') finances.egresos = row.total ?? 0;
   }
 
   const monthFormatter = new Intl.DateTimeFormat('es-CO', { month: 'short' });
   const monthlyProduction = Array.from({ length: 6 }, (_, index) => {
     const date = new Date(since.getFullYear(), since.getMonth() + index, 1);
     const kg = monthlyRows
-      .filter((row) => row.fecha.getFullYear() === date.getFullYear() && row.fecha.getMonth() === date.getMonth())
-      .reduce((sum, row) => sum + row.cantidad, 0);
+      .filter((row: Row) => row.fecha.getFullYear() === date.getFullYear() && row.fecha.getMonth() === date.getMonth())
+      .reduce((sum: number, row: Row) => sum + row.cantidad, 0);
     return { month: monthFormatter.format(date).replace('.', ''), kg };
   });
 
@@ -99,11 +91,8 @@ adminRoutes.get('/dashboard', async (context: any) => {
 
 adminRoutes.get('/settings', async (context: any) => {
   await requireRole(['administrador'])(context.user);
-  const settings = await prisma.configuracionSistema.upsert({
-    where: { id: SETTINGS_ID },
-    create: { id: SETTINGS_ID, ...defaultSettings },
-    update: {},
-  });
+  await sql`INSERT INTO configuracion_sistema ${sql({ id: SETTINGS_ID, ...defaultSettings, updatedAt: new Date() })} ON CONFLICT (id) DO NOTHING`;
+  const [settings] = await sql`SELECT * FROM configuracion_sistema WHERE id = ${SETTINGS_ID}`;
   return { success: true, data: settings };
 });
 
@@ -139,11 +128,7 @@ adminRoutes.put('/settings', async (context: any) => {
     maintenanceAlerts: body.maintenanceAlerts,
     updatedBy: context.user.id,
   };
-  const settings = await prisma.configuracionSistema.upsert({
-    where: { id: SETTINGS_ID },
-    create: { id: SETTINGS_ID, ...data },
-    update: data,
-  });
+  const settings = await upsert('configuracion_sistema', ['id'], { id: SETTINGS_ID, ...data }, data);
   return { success: true, data: settings, message: 'Configuración actualizada' };
 });
 

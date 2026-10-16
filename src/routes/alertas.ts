@@ -1,9 +1,10 @@
 import { Elysia } from 'elysia';
+import { alertPageQuery } from '../services/alertPagination';
 import { z } from 'zod';
 import { authenticateToken } from '../middleware/auth';
 import { ApiResponse } from '../types/apicola';
 import { AlertService, CreateAlertData } from '../services/alertService';
-import { TipoAlerta, PrioridadAlerta } from '../generated/prisma/enums';
+import { TipoAlerta, PrioridadAlerta } from '../db/enums';
 
 // Zod schemas for validation
 const createAlertSchema = z.object({
@@ -16,27 +17,13 @@ const createAlertSchema = z.object({
 const alertasRoutes = new Elysia({ prefix: '/alertas' });
 
 // GET /alertas - Listar alertas del usuario autenticado
-alertasRoutes.get('/', async ({ headers, query }) => {
-  try {
-    const user = await authenticateToken({ headers });
-    const userId = user?.id;
-
-    const limit = query?.limit ? parseInt(query.limit as string) : 50;
-
-    const alerts = await AlertService.getUserAlerts(userId, limit);
-
-    return {
-      success: true,
-      data: alerts,
-      message: 'Alertas obtenidas exitosamente'
-    } as ApiResponse;
-  } catch (error: any) {
-    console.error('Get alerts error:', error);
-    return {
-      success: false,
-      error: error.message || 'Error interno del servidor'
-    } as ApiResponse;
-  }
+alertasRoutes.get('/', async ({ headers, query, set }) => {
+  const user = await authenticateToken({ headers });
+  const parsed = alertPageQuery.safeParse(query);
+  if (!parsed.success) { set.status = 400; return {success:false,error:'Página o filtros de alertas inválidos'}; }
+  const {page,limit,unreadOnly} = parsed.data;
+  const {alerts,pagination} = await AlertService.getUserAlertsPage(user.id,limit,page,unreadOnly);
+  return {success:true,data:alerts,pagination};
 });
 
 // POST /alertas - Crear alerta manual

@@ -2,7 +2,17 @@ import { Elysia } from 'elysia';
 import { z } from 'zod';
 import { authenticateToken } from '../middleware/auth';
 import { ApiResponse, Apiario } from '../types/apicola';
-import prisma from '../prisma/client';
+import { sql, insert, updateById, attachMany, idList } from '../db';
+
+// Carga apiarios con sus colmenas (solo las del usuario cuando no es administrador)
+async function withColmenas(apiarios: any[], onlyUserId?: string) {
+  if (!apiarios.length) return [];
+  const ids = sql.array(idList(apiarios), 'TEXT');
+  const colmenas = onlyUserId
+    ? await sql`SELECT * FROM colmenas WHERE "apiarioId" = ANY(${ids}) AND "usuarioId" = ${onlyUserId}`
+    : await sql`SELECT * FROM colmenas WHERE "apiarioId" = ANY(${ids})`;
+  return attachMany(apiarios, colmenas, 'apiarioId', 'colmenas');
+}
 
 // Zod schemas for validation
 const createApiarioSchema = z.object({
@@ -43,34 +53,13 @@ apiariosRoutes.get('/', async ({ headers }) => {
     let apiarios;
     if (userRole === 'administrador') {
       // Admin can see all apiarios
-      apiarios = await prisma.apiario.findMany({
-        include: {
-          colmenas: true
-        }
-      });
+      apiarios = await withColmenas(await sql`SELECT * FROM apiarios`);
     } else {
       // Apicultor can see their own apiarios OR apiarios that have their colmenas
-      apiarios = await prisma.apiario.findMany({
-        where: {
-          OR: [
-            { usuarioId: userId },
-            {
-              colmenas: {
-                some: {
-                  usuarioId: userId
-                }
-              }
-            }
-          ]
-        },
-        include: {
-          colmenas: {
-            where: {
-              usuarioId: userId
-            }
-          }
-        }
-      });
+      apiarios = await withColmenas(await sql`
+        SELECT a.* FROM apiarios a
+        WHERE a."usuarioId" = ${userId}
+           OR EXISTS (SELECT 1 FROM colmenas c WHERE c."apiarioId" = a.id AND c."usuarioId" = ${userId})`, userId);
     }
 
     return {
@@ -97,35 +86,13 @@ apiariosRoutes.get('/:id', async ({ params, headers }) => {
 
     let apiario;
     if (userRole === 'administrador') {
-      apiario = await prisma.apiario.findUnique({
-        where: { id: id },
-        include: {
-          colmenas: true
-        }
-      });
+      apiario = (await withColmenas(await sql`SELECT * FROM apiarios WHERE id = ${id}`))[0];
     } else {
-      apiario = await prisma.apiario.findFirst({
-        where: {
-          id: id,
-          OR: [
-            { usuarioId: userId },
-            {
-              colmenas: {
-                some: {
-                  usuarioId: userId
-                }
-              }
-            }
-          ]
-        },
-        include: {
-          colmenas: {
-            where: {
-              usuarioId: userId
-            }
-          }
-        }
-      });
+      apiario = (await withColmenas(await sql`
+        SELECT a.* FROM apiarios a
+        WHERE a.id = ${id}
+          AND (a."usuarioId" = ${userId}
+            OR EXISTS (SELECT 1 FROM colmenas c WHERE c."apiarioId" = a.id AND c."usuarioId" = ${userId}))`, userId))[0];
     }
 
     if (!apiario) {
@@ -157,13 +124,11 @@ apiariosRoutes.post('/', async ({ body, headers }) => {
 
     const validatedData = createApiarioSchema.parse(body);
 
-    const newApiario = await prisma.apiario.create({
-      data: {
-        ...validatedData,
-        registroIcaExpedidoEn: validatedData.registroIcaExpedidoEn ? new Date(validatedData.registroIcaExpedidoEn) : undefined,
-        registroIcaVenceEn: validatedData.registroIcaVenceEn ? new Date(validatedData.registroIcaVenceEn) : undefined,
-        usuarioId: userId
-      }
+    const newApiario = await insert('apiarios', {
+      ...validatedData,
+      registroIcaExpedidoEn: validatedData.registroIcaExpedidoEn ? new Date(validatedData.registroIcaExpedidoEn) : undefined,
+      registroIcaVenceEn: validatedData.registroIcaVenceEn ? new Date(validatedData.registroIcaVenceEn) : undefined,
+      usuarioId: userId
     });
 
     return {
@@ -196,9 +161,7 @@ apiariosRoutes.put('/:id', async ({ params, body, headers }) => {
     const userRole = user?.rol;
 
     // Check if user owns the apiario or is admin
-    const apiario = await prisma.apiario.findUnique({
-      where: { id: id }
-    });
+    const [apiario] = await sql`SELECT * FROM apiarios WHERE id = ${id}`;
 
     if (!apiario) {
       return {
@@ -217,13 +180,10 @@ apiariosRoutes.put('/:id', async ({ params, body, headers }) => {
     const validatedData = updateApiarioSchema.parse(body);
 
     const { registroIcaExpedidoEn, registroIcaVenceEn, ...rest } = validatedData;
-    const updatedApiario = await prisma.apiario.update({
-      where: { id: id },
-      data: {
-        ...rest,
-        registroIcaExpedidoEn: registroIcaExpedidoEn === null ? null : registroIcaExpedidoEn ? new Date(registroIcaExpedidoEn) : undefined,
-        registroIcaVenceEn: registroIcaVenceEn === null ? null : registroIcaVenceEn ? new Date(registroIcaVenceEn) : undefined,
-      }
+    const updatedApiario = await updateById('apiarios', id, {
+      ...rest,
+      registroIcaExpedidoEn: registroIcaExpedidoEn === null ? null : registroIcaExpedidoEn ? new Date(registroIcaExpedidoEn) : undefined,
+      registroIcaVenceEn: registroIcaVenceEn === null ? null : registroIcaVenceEn ? new Date(registroIcaVenceEn) : undefined,
     });
 
     return {
@@ -238,12 +198,6 @@ apiariosRoutes.put('/:id', async ({ params, body, headers }) => {
         success: false,
         error: 'Datos de entrada inválidos',
         data: error.errors
-      } as ApiResponse;
-    }
-    if (error.code === 'P2025') {
-      return {
-        success: false,
-        error: 'Apiario no encontrado'
       } as ApiResponse;
     }
     return {
@@ -262,12 +216,7 @@ apiariosRoutes.delete('/:id', async ({ params, headers }) => {
     const userRole = user?.rol;
 
     // Check if apiario exists and user has permission
-    const apiario = await prisma.apiario.findUnique({
-      where: { id: id },
-      include: {
-        colmenas: true
-      }
-    });
+    const apiario = (await withColmenas(await sql`SELECT * FROM apiarios WHERE id = ${id}`))[0];
 
     if (!apiario) {
       return {
@@ -290,9 +239,7 @@ apiariosRoutes.delete('/:id', async ({ params, headers }) => {
       } as ApiResponse;
     }
 
-    await prisma.apiario.delete({
-      where: { id: id }
-    });
+    await sql`DELETE FROM apiarios WHERE id = ${id}`;
 
     return {
       success: true,
@@ -300,12 +247,6 @@ apiariosRoutes.delete('/:id', async ({ params, headers }) => {
     } as ApiResponse;
   } catch (error: any) {
     console.error('Delete apiario error:', error);
-    if (error.code === 'P2025') {
-      return {
-        success: false,
-        error: 'Apiario no encontrado'
-      } as ApiResponse;
-    }
     return {
       success: false,
       error: error.message || 'Error interno del servidor'

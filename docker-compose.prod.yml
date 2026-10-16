@@ -1,0 +1,111 @@
+name: apigestion
+
+x-api-image: &api-image
+  image: johpaz/apigestion-api:${API_TAG:-bun-sql-20261016}
+
+x-hardening: &hardening
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+
+services:
+  api:
+    <<: [*api-image, *hardening]
+    container_name: apicolmena-api
+    restart: unless-stopped
+    stop_grace_period: 30s
+    pids_limit: 512
+    tmpfs: ["/tmp:size=128M,mode=1777"]
+    # Sin env_file a propósito: el .env de desarrollo (DATABASE_URL local, PORT, etc.)
+    # no debe filtrarse al contenedor. Compose solo lo usa para sustituir ${VARIABLES}.
+    environment:
+      NODE_ENV: production
+      PORT: 18790
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-apicolmena}
+      JWT_SECRET: ${JWT_SECRET:?define JWT_SECRET en .env}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
+      CORS_ORIGIN: ${CORS_ORIGIN}
+      BASE_URL: https://${APICOLMENA_DOMAIN}
+      FRONTEND_URL: ${FRONTEND_URL}
+      API_VERSION: ${API_VERSION:-v1}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID}
+      FIREBASE_PRIVATE_KEY_ID: ${FIREBASE_PRIVATE_KEY_ID}
+      FIREBASE_PRIVATE_KEY: ${FIREBASE_PRIVATE_KEY}
+      FIREBASE_CLIENT_EMAIL: ${FIREBASE_CLIENT_EMAIL}
+      FIREBASE_CLIENT_ID: ${FIREBASE_CLIENT_ID}
+      FIREBASE_CLIENT_X509_CERT_URL: ${FIREBASE_CLIENT_X509_CERT_URL}
+      USD_TO_COP_RATE: ${USD_TO_COP_RATE:-4000}
+      EUR_TO_USD_RATE: ${EUR_TO_USD_RATE:-1.05}
+      EUR_TO_COP_RATE: ${EUR_TO_COP_RATE:-4200}
+      # El entrypoint migra la base y crea el administrador inicial en cada arranque
+      SUPER_ADMIN_EMAIL: ${SUPER_ADMIN_EMAIL:-}
+      SUPER_ADMIN_PASSWORD: ${SUPER_ADMIN_PASSWORD:-}
+      ADMIN_NAME: ${ADMIN_NAME:-Administrador}
+      # Asistente de IA (Hive SDK): HiveDB vive en un volumen persistente
+      HIVE_HOME: /data/hive
+      HIVE_MASTER_KEY: ${HIVE_MASTER_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      AI_MODEL: ${AI_MODEL:-gemini-3.8-flash}
+    volumes:
+      - hive-data-apicolmena:/data/hive
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=n8n_evoapi
+      - traefik.http.routers.apicolmena.rule=Host(`${APICOLMENA_DOMAIN}`)
+      - traefik.http.routers.apicolmena.entrypoints=websecure
+      - traefik.http.routers.apicolmena.tls=true
+      - traefik.http.routers.apicolmena.tls.certresolver=mytlschallenge
+      - traefik.http.routers.apicolmena.middlewares=apicolmena-headers@docker
+      - traefik.http.middlewares.apicolmena-headers.headers.SSLRedirect=true
+      - traefik.http.middlewares.apicolmena-headers.headers.STSSeconds=315360000
+      - traefik.http.services.apicolmena.loadbalancer.server.port=18790
+    # Solo loopback: el acceso público va por Traefik
+    ports:
+      - "127.0.0.1:${API_PORT:-18790}:18790"
+    depends_on:
+      db: { condition: service_healthy }
+    networks:
+      - backendApiColmena
+      - traefik-proxy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          bun -e "process.exit((await fetch('http://localhost:' +
+          (process.env.PORT || '18790') + '/health')).ok ? 0 : 1)"
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+
+  db:
+    image: postgres:18-alpine
+    container_name: apicolmena-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?define POSTGRES_PASSWORD en .env}
+      POSTGRES_DB: ${POSTGRES_DB:-apicolmena}
+    volumes:
+      - postgres-data-apicolmena:/var/lib/postgresql
+    # Sin puertos publicados: la base solo es alcanzable desde la red interna `backend`
+    networks: [backendApiColmena]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+networks:
+  backendApiColmena:
+  traefik-proxy:
+    external: true
+    name: n8n_evoapi
+
+volumes:
+  postgres-data-apicolmena:
+  hive-data-apicolmena:

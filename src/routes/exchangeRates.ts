@@ -2,8 +2,11 @@ import { Elysia } from 'elysia';
 import { z } from 'zod';
 import { authenticateToken } from '../middleware/auth';
 import { ApiResponse } from '../types/apicola';
-import prisma from '../prisma/client';
-import { Moneda } from '../generated/prisma/client';
+import { sql, upsert } from '../db';
+import { Moneda } from '../db/enums';
+
+const upsertRate = (from: Moneda, to: Moneda, rate: number) =>
+  upsert('exchange_rates', ['fromCurrency', 'toCurrency'], { fromCurrency: from, toCurrency: to, rate }, { rate, lastUpdated: new Date() });
 
 // Zod schemas for validation
 const updateRateSchema = z.object({
@@ -25,9 +28,7 @@ exchangeRatesRoutes.get('/', async ({ headers }) => {
   try {
     const user = await authenticateToken({ headers });
 
-    const rates = await prisma.exchangeRate.findMany({
-      orderBy: { lastUpdated: 'desc' }
-    });
+    const rates = await sql`SELECT * FROM exchange_rates ORDER BY "lastUpdated" DESC`;
 
     return {
       success: true,
@@ -56,14 +57,7 @@ exchangeRatesRoutes.get('/:from/:to', async ({ params, headers }) => {
       } as ApiResponse;
     }
 
-    const rate = await prisma.exchangeRate.findUnique({
-      where: {
-        fromCurrency_toCurrency: {
-          fromCurrency: from as Moneda,
-          toCurrency: to as Moneda
-        }
-      }
-    });
+    const rate = (await sql`SELECT * FROM exchange_rates WHERE "fromCurrency" = ${from} AND "toCurrency" = ${to}`)[0];
 
     if (!rate) {
       return {
@@ -100,23 +94,7 @@ exchangeRatesRoutes.put('/:from/:to', async ({ params, body, headers }) => {
       } as ApiResponse;
     }
 
-    const updatedRate = await prisma.exchangeRate.upsert({
-      where: {
-        fromCurrency_toCurrency: {
-          fromCurrency: from as Moneda,
-          toCurrency: to as Moneda
-        }
-      },
-      update: {
-        rate: validatedData.rate,
-        lastUpdated: new Date()
-      },
-      create: {
-        fromCurrency: from as Moneda,
-        toCurrency: to as Moneda,
-        rate: validatedData.rate
-      }
-    });
+    const updatedRate = await upsertRate(from as Moneda, to as Moneda, validatedData.rate);
 
     return {
       success: true,
@@ -146,23 +124,7 @@ exchangeRatesRoutes.put('/', async ({ body, headers }) => {
     const validatedData = updateMultipleRatesSchema.parse(body);
 
     const updates = validatedData.rates.map(async (rateData) => {
-      return prisma.exchangeRate.upsert({
-        where: {
-          fromCurrency_toCurrency: {
-            fromCurrency: rateData.from,
-            toCurrency: rateData.to
-          }
-        },
-        update: {
-          rate: rateData.rate,
-          lastUpdated: new Date()
-        },
-        create: {
-          fromCurrency: rateData.from,
-          toCurrency: rateData.to,
-          rate: rateData.rate
-        }
-      });
+      return upsertRate(rateData.from, rateData.to, rateData.rate);
     });
 
     const results = await Promise.all(updates);
@@ -249,23 +211,7 @@ exchangeRatesRoutes.post('/update-from-api', async ({ headers, body }) => {
 
     // Actualizar tasas en la base de datos
     const updates = rateUpdates.map(async (rateData) => {
-      return prisma.exchangeRate.upsert({
-        where: {
-          fromCurrency_toCurrency: {
-            fromCurrency: rateData.from,
-            toCurrency: rateData.to
-          }
-        },
-        update: {
-          rate: rateData.rate,
-          lastUpdated: new Date()
-        },
-        create: {
-          fromCurrency: rateData.from,
-          toCurrency: rateData.to,
-          rate: rateData.rate
-        }
-      });
+      return upsertRate(rateData.from, rateData.to, rateData.rate);
     });
 
     const results = await Promise.all(updates);

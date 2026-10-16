@@ -1,7 +1,7 @@
 import { Elysia } from 'elysia';
 import { authenticateToken } from '../middleware/auth';
 import { ApiResponse, Colmena } from '../types/apicola';
-import prisma from '../prisma/client';
+import { sql, insert, updateWhere } from '../db';
 import { AlertService } from '../services/alertService';
 
 const colmenasRoutes = new Elysia({ prefix: '/colmenas' });
@@ -11,9 +11,7 @@ colmenasRoutes.get('/', async ({ headers }) => {
   try {
     const user = await authenticateToken({ headers });
     const userId = user?.id;
-    const colmenas = await prisma.colmena.findMany({
-      where: { usuarioId: userId }
-    });
+    const colmenas = await sql`SELECT * FROM colmenas WHERE "usuarioId" = ${userId}`;
 
    
 
@@ -38,12 +36,7 @@ colmenasRoutes.get('/:id', async ({ params, headers }) => {
     const { id } = params;
     const userId = user?.id;
 
-    const colmena = await prisma.colmena.findFirst({
-      where: {
-        id: id,
-        usuarioId: userId
-      }
-    });
+    const colmena = (await sql`SELECT * FROM colmenas WHERE id = ${id} AND "usuarioId" = ${userId} LIMIT 1`)[0];
 
     if (!colmena) {
       return {
@@ -73,14 +66,12 @@ colmenasRoutes.post('/', async ({ body, headers }) => {
     const userId = user?.id;
 
     const colmenaData = body as any;
-    const newColmena = await prisma.colmena.create({
-      data: {
-        nombre: colmenaData.nombre,
-        estado: colmenaData.estado || 'activa',
-        fechaInstalacion: new Date(colmenaData.fechaInstalacion),
-        apiarioId: colmenaData.apiarioId,
-        usuarioId: userId
-      }
+    const newColmena = await insert('colmenas', {
+      nombre: colmenaData.nombre,
+      estado: colmenaData.estado || 'activa',
+      fechaInstalacion: new Date(colmenaData.fechaInstalacion),
+      apiarioId: colmenaData.apiarioId,
+      usuarioId: userId
     });
 
     // Crear alertas recurrentes automáticamente
@@ -118,33 +109,27 @@ colmenasRoutes.put('/:id', async ({ params, body, headers }) => {
     const userId = user?.id;
 
     const colmenaData = body as any;
-    const updatedColmena = await prisma.colmena.updateMany({
-      where: {
-        id: id,
-        usuarioId: userId
-      },
-      data: {
+    const updated = await updateWhere(
+      'colmenas',
+      {
         nombre: colmenaData.nombre,
         estado: colmenaData.estado,
         apiarioId: colmenaData.apiarioId,
         fechaInstalacion: colmenaData.fechaInstalacion ? new Date(colmenaData.fechaInstalacion) : undefined
-      }
-    });
+      },
+      sql`id = ${id} AND "usuarioId" = ${userId}`
+    );
 
-    if (updatedColmena.count === 0) {
+    if (updated.length === 0) {
       return {
         success: false,
         error: 'Colmena no encontrada'
       } as ApiResponse;
     }
 
-    const colmena = await prisma.colmena.findUnique({
-      where: { id: id }
-    });
-
     return {
       success: true,
-      data: colmena,
+      data: updated[0],
       message: 'Colmena actualizada exitosamente'
     } as ApiResponse<Colmena>;
   } catch (error: any) {
@@ -163,14 +148,9 @@ colmenasRoutes.delete('/:id', async ({ params, headers }) => {
     const { id } = params;
     const userId = user?.id;
 
-    const deletedColmena = await prisma.colmena.deleteMany({
-      where: {
-        id: id,
-        usuarioId: userId
-      }
-    });
+    const deleted = await sql`DELETE FROM colmenas WHERE id = ${id} AND "usuarioId" = ${userId} RETURNING id`;
 
-    if (deletedColmena.count === 0) {
+    if (deleted.length === 0) {
       return {
         success: false,
         error: 'Colmena no encontrada'

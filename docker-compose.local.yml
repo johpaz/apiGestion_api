@@ -13,6 +13,9 @@ services:
       - BASE_URL=http://localhost:3001
       - FRONTEND_URL=http://localhost:5173
       - API_VERSION=v1
+      - SUPER_ADMIN_EMAIL=admin@apicolmena.com
+      - SUPER_ADMIN_PASSWORD=Admin123!
+      - HIVE_HOME=/data/hive
     ports:
       - "3001:3001"
     depends_on:
@@ -20,12 +23,13 @@ services:
         condition: service_healthy
     volumes:
       - ./src:/app/src
-      - ./prisma:/app/prisma
+      - ./db:/app/db
+      - hive_local_data:/data/hive
     networks:
       - apicolmena-local
 
   db:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     container_name: apicolmena-db-local
     restart: unless-stopped
     environment:
@@ -35,7 +39,7 @@ services:
     ports:
       - "5433:5432"
     volumes:
-      - postgres_local_data:/var/lib/postgresql/data
+      - postgres_local_data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d apicolmena"]
       interval: 5s
@@ -47,6 +51,7 @@ services:
 
 volumes:
   postgres_local_data:
+  hive_local_data:
 
 networks:
   apicolmena-local:

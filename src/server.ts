@@ -21,24 +21,44 @@ import exchangeRatesRoutes from './routes/exchangeRates';
 import reportesRoutes from './routes/reportes';
 import adminRoutes from './routes/admin';
 import casosSanitariosRoutes from './routes/casosSanitarios';
-import prisma from './prisma/client';
+import aiRoutes from './routes/ai';
+import mcpRoutes from './routes/mcp';
+import { initAi, shutdownAi } from './ai/hive';
+import { ready } from './db';
 import { schedulerService } from './services/schedulerService';
 
 const PORT = process.env.PORT || 3001;
 const apiVersion = process.env.API_VERSION || 'v1';
 
-// Initialize Prisma connection
-prisma.$connect()
+// Verify database connection
+ready()
   .then(() => {
-    logger.info('✅ Conexión a la base de datos Prisma establecida');
+    logger.info('✅ Conexión a la base de datos establecida');
 
     // Start scheduler service for recurrent alerts
     schedulerService.start();
   })
   .catch((error: any) => {
-    logger.error('❌ Error al conectar con la base de datos Prisma:', error);
+    logger.error({ error }, '❌ Error al conectar con la base de datos');
     process.exit(1);
   });
+
+// Hive SDK (agentes + MCP). Un fallo aquí no tumba la API: el asistente responde "no disponible".
+initAi().catch((error: any) => {
+  const locked = /already open|acquire lock/i.test(String(error?.message));
+  logger.error(
+    { error: error?.message ?? error },
+    locked
+      ? '❌ HiveDB ya está abierta por OTRO proceso (¿dos servidores corriendo?). Deja uno solo o usa otro HIVE_HOME; el asistente de IA queda deshabilitado en este'
+      : '❌ No se pudo iniciar Hive SDK; el asistente de IA queda deshabilitado',
+  );
+});
+
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.once(signal, () => {
+    shutdownAi().finally(() => process.exit(0));
+  });
+}
 
 const app = new Elysia()
   .use(errorHandler)
@@ -51,7 +71,7 @@ const app = new Elysia()
     })(),
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Mcp-Protocol-Version']
   }))
   .onRequest(({ request }) => {
     console.log('CORS DEBUG: Incoming request:', {
@@ -76,6 +96,8 @@ const app = new Elysia()
   // API Routes
   .group(`/api/${apiVersion}`, (app) =>
     app
+      // Antes que cualquier ruta con authGuard global: el MCP responde su propio 401 (WWW-Authenticate)
+      .use(mcpRoutes)
       .use(authRoutes)
       .use(apiariosRoutes)
       .use(colmenasRoutes)
@@ -92,6 +114,7 @@ const app = new Elysia()
       .use(reportesRoutes)
       .use(adminRoutes)
       .use(casosSanitariosRoutes)
+      .use(aiRoutes)
   )
   .listen(PORT, () => {
     logger.info(`🐝 ApiGestión Pro API ejecutándose en puerto ${PORT}`);

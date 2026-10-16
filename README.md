@@ -17,12 +17,15 @@ Backend API en TypeScript con Express para la plataforma de gestión apícola pr
 ```
 Api/
 ├── src/
-│   ├── controllers/     # Controladores (futuro)
+│   ├── db/              # Conexión Bun.SQL, helpers, enums y migrador
 │   ├── middleware/      # Middleware personalizado
 │   ├── routes/          # Rutas de la API
 │   ├── types/           # Definiciones de tipos TypeScript
 │   ├── utils/           # Utilidades y datos mock
 │   └── server.ts        # Servidor principal
+├── db/
+│   ├── migrations/      # Migraciones SQL (<fecha>_<nombre>/migration.sql)
+│   └── seed.ts          # Catálogo sanitario + primer administrador
 ├── dist/                # Código compilado
 ├── package.json
 ├── tsconfig.json
@@ -43,16 +46,52 @@ cp .env.example .env
 # Editar .env con tus configuraciones
 ```
 
-3. **Ejecutar en desarrollo:**
+3. **Levantar la base de datos (contenedor Postgres) y migrar:**
 ```bash
-npm run dev
+docker compose -f docker-compose.local.yml up -d db   # Postgres en localhost:5433
+bun run db:migrate                                     # aplica db/migrations
+bun run db:seed                                        # opcional: catálogo y admin inicial
 ```
 
-4. **Compilar para producción:**
+4. **Ejecutar en desarrollo:**
+```bash
+bun run dev
+```
+
+5. **Compilar para producción:**
 ```bash
 npm run build
 npm start
 ```
+
+### Migraciones
+
+Sin ORM: la base se maneja con `Bun.SQL` y migraciones SQL propias. `bun run db:migrate`
+aplica en orden las carpetas de `db/migrations` y registra cada una en `_prisma_migrations`
+(misma tabla que usaba Prisma, por lo que las bases existentes no se re-migran). El contenedor
+ejecuta este paso automáticamente en `entrypoint.sh` antes de iniciar la API.
+
+### Despliegue con Docker
+
+La imagen se publica en Docker Hub como `johpaz/apigestion-api:<tag>` (el tag `latest` es la versión anterior; no se sobrescribe).
+
+```bash
+# 1. Construir y publicar (formato docker para conservar el HEALTHCHECK)
+podman build --format docker -t johpaz/apigestion-api:<tag> .
+podman push johpaz/apigestion-api:<tag>
+
+# 2. En el servidor: definir .env (ver .env.example) y levantar
+API_TAG=<tag> docker compose -f docker-compose.prod.yml up -d
+```
+
+`docker-compose.prod.yml` levanta Postgres (red interna `backend`, sin puertos publicados) y la API
+(publicada por Traefik en `APICOLMENA_DOMAIN` vía la red externa `n8n_evoapi`). Al arrancar, el
+contenedor migra la base, siembra el catálogo y crea el administrador inicial
+(`SUPER_ADMIN_EMAIL` / `SUPER_ADMIN_PASSWORD`). Para actualizar: cambia `API_TAG` y repite el `up -d`.
+Para desarrollo local usa `docker-compose.local.yml`.
+
+Para un cambio de esquema, crea `db/migrations/<AAAAMMDDHHMMSS>_<nombre>/migration.sql`; nunca
+edites una migración ya aplicada (el migrador avisa si su contenido cambió).
 
 ## 📚 Endpoints de la API
 
@@ -184,3 +223,14 @@ curl http://localhost:3001/health
 ## 📄 Licencia
 
 MIT License - ver archivo LICENSE para detalles.
+## 🐝 Asistente de IA (Hive SDK + Gemini + A2UI + MCP v2)
+
+- **Enjambres por rol** (`src/ai/swarm.ts`): cada usuario tiene su propia colmena de agentes en HiveDB (un inquilino por usuario).
+  Apicultor: Maestra + Campo, Sanidad y Negocio. Administrador: Coordinadora + Usuarios y Vigilancia. No se instalan los agentes de fábrica del SDK.
+- **Modelo**: `gemini/gemini-3.8-flash` con la API key de **cada** apicultor (`PUT /api/v1/ai/api-key`, cifrada con AES-256-GCM en `HIVE_HOME`).
+- **Herramientas** (`src/ai/tools.ts`): solo lectura, filtradas por el usuario del token. Las `admin_*` exigen rol administrador.
+- **UI rica**: el agente llama `ui_mostrar` y el servidor emite superficies **A2UI v0.8** (SSE `event: a2ui`) con métricas, tablas y gráficas.
+- **MCP v2**: `POST /api/v1/mcp/v2` (Streamable HTTP, `Authorization: Bearer <JWT>`): tools de tu rol + skills como prompts.
+- **Chat**: `POST /api/v1/ai/chat` (SSE; `Accept: application/json` para respuesta única). Estado: `GET /api/v1/ai/estado`.
+- **Despliegue**: `HIVE_HOME` debe ser un volumen persistente (ya configurado en los compose). Requiere Bun ≥ 1.4.2. No funciona en Vercel serverless.
+- **Pruebas**: `bun test` (la integración simula Gemini y Postgres).

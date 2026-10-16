@@ -1,8 +1,11 @@
 #!/bin/sh
 set -e
 
-echo "🔄 Ejecutando migraciones de Prisma..."
-bunx prisma migrate deploy --schema=./prisma/schema.prisma
+echo "🔄 Ejecutando migraciones..."
+bun run src/db/migrate.ts
 
-echo "✅ Migraciones completadas. Iniciando aplicación..."
+echo "🌱 Sembrando catálogo y administrador inicial (idempotente)..."
+bun run db/seed.ts
+
+echo "✅ Base de datos lista. Iniciando aplicación..."
 exec bun run src/server.ts

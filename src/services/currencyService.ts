@@ -1,5 +1,4 @@
-import prisma from '../prisma/client';
-import { Moneda } from '../generated/prisma/enums';
+import { sql } from '../db';
 
 export type Currency = 'COP' | 'EUR' | 'USD';
 
@@ -58,28 +57,14 @@ export class CurrencyService {
 
     try {
       // Intentar obtener la tasa directa desde la base de datos
-      const directRate = await prisma.exchangeRate.findUnique({
-        where: {
-          fromCurrency_toCurrency: {
-            fromCurrency: from as Moneda,
-            toCurrency: to as Moneda
-          }
-        }
-      });
+      const [directRate] = await sql`SELECT rate FROM exchange_rates WHERE "fromCurrency" = ${from} AND "toCurrency" = ${to}`;
 
       if (directRate) {
         return directRate.rate;
       }
 
       // Intentar obtener la tasa inversa y calcular
-      const inverseRate = await prisma.exchangeRate.findUnique({
-        where: {
-          fromCurrency_toCurrency: {
-            fromCurrency: to as Moneda,
-            toCurrency: from as Moneda
-          }
-        }
-      });
+      const [inverseRate] = await sql`SELECT rate FROM exchange_rates WHERE "fromCurrency" = ${to} AND "toCurrency" = ${from}`;
 
       if (inverseRate) {
         return 1 / inverseRate.rate;
@@ -171,11 +156,11 @@ export class CurrencyService {
    */
   static async getAllRates(): Promise<Record<string, number>> {
     try {
-      const dbRates = await prisma.exchangeRate.findMany();
+      const dbRates = await sql`SELECT "fromCurrency", "toCurrency", rate FROM exchange_rates`;
       const rates: Record<string, number> = {};
 
       // Agregar tasas desde DB
-      dbRates.forEach((rate: { fromCurrency: Moneda; toCurrency: Moneda; rate: number }) => {
+      dbRates.forEach((rate: { fromCurrency: string; toCurrency: string; rate: number }) => {
         rates[`${rate.fromCurrency}_${rate.toCurrency}`] = rate.rate;
       });
 

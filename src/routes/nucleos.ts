@@ -1,7 +1,7 @@
 import { Elysia } from 'elysia';
 import { z } from 'zod';
 import { authGuard } from '../middleware/auth';
-import prisma from '../prisma/client';
+import { sql, insert, updateById, idList, type Row } from '../db';
 import { AlertService } from '../services/alertService';
 import { validateNucleusFinalization } from '../services/traceabilityPolicy';
 
@@ -19,9 +19,15 @@ const createSchema = z.object({
   proveedorReina: z.string().trim().max(160).optional(),
 });
 
-const updateSchema = createSchema.pick({
-  numero: true, codigo: true, tipo: true, estado: true, origenReina: true,
-  detalleOrigenReina: true, proveedorReina: true,
+// Sin defaults: un PATCH solo debe modificar los campos enviados
+const updateSchema = z.object({
+  numero: z.coerce.number().int().positive(),
+  codigo: z.string().trim().min(2).max(40),
+  tipo: z.string().trim().min(2).max(80),
+  estado: z.enum(['en_formacion', 'en_desarrollo', 'listo']),
+  origenReina: z.enum(['criada', 'comprada', 'capturada', 'desconocida']),
+  detalleOrigenReina: z.string().trim().max(500),
+  proveedorReina: z.string().trim().max(160),
 }).partial();
 
 const conversionSchema = z.object({
@@ -43,59 +49,105 @@ const ventaSchema = z.object({
   comprobantePath: z.string().url().optional(),
 });
 
-const includeNucleo = {
-  apiario: { select: { id: true, nombre: true, ciudad: true, registroIcaNumero: true } },
-  colmenaOrigen: { select: { id: true, nombre: true } },
-  donantes: { include: { colmena: { select: { id: true, nombre: true } } } },
-  eventos: { where: { anuladoAt: null }, orderBy: { fecha: 'desc' as const } },
-  ventas: { orderBy: { fecha: 'desc' as const } },
-  conversiones: { include: { colmena: { select: { id: true, nombre: true, estado: true } } }, orderBy: { fecha: 'desc' as const } },
+const group = (rows: Row[], key: string) => {
+  const map = new Map<string, Row[]>();
+  for (const row of rows) map.set(row[key], [...(map.get(row[key]) ?? []), row]);
+  return map;
 };
+const byId = (rows: Row[]) => new Map(rows.map((r) => [r.id, r]));
+
+// Equivalente al include anterior: apiario, colmenaOrigen, donantes(+colmena), eventos vigentes, ventas y conversiones(+colmena)
+async function withNucleoRelations(nucleos: Row[]): Promise<Row[]> {
+  if (!nucleos.length) return [];
+  const ids = sql.array(idList(nucleos), 'TEXT');
+  const [apiarios, colmenasOrigen, donantes, eventos, ventas, conversiones] = await Promise.all([
+    sql`SELECT id, nombre, ciudad, "registroIcaNumero" FROM apiarios WHERE id = ANY(${sql.array([...new Set(nucleos.map((n) => n.apiarioId as string))], 'TEXT')})`,
+    sql`SELECT id, nombre FROM colmenas WHERE id = ANY(${sql.array(nucleos.map((n) => n.colmenaOrigenId as string).filter(Boolean), 'TEXT')})`,
+    sql`SELECT d.*, c.id AS "c_id", c.nombre AS "c_nombre" FROM nucleos_donantes d JOIN colmenas c ON c.id = d."colmenaId" WHERE d."nucleoId" = ANY(${ids})`,
+    sql`SELECT * FROM eventos_nucleo WHERE "nucleoId" = ANY(${ids}) AND "anuladoAt" IS NULL ORDER BY fecha DESC`,
+    sql`SELECT * FROM ventas_nucleo WHERE "nucleoId" = ANY(${ids}) ORDER BY fecha DESC`,
+    sql`SELECT v.*, c.id AS "c_id", c.nombre AS "c_nombre", c.estado AS "c_estado" FROM conversiones_nucleo v JOIN colmenas c ON c.id = v."colmenaId" WHERE v."nucleoId" = ANY(${ids}) ORDER BY v.fecha DESC`,
+  ]);
+  const apiarioById = byId(apiarios);
+  const origenById = byId(colmenasOrigen);
+  const donantesBy = group(donantes.map(({ c_id, c_nombre, ...d }: Row) => ({ ...d, colmena: { id: c_id, nombre: c_nombre } })), 'nucleoId');
+  const eventosBy = group(eventos, 'nucleoId');
+  const ventasBy = group(ventas, 'nucleoId');
+  const conversionesBy = group(conversiones.map(({ c_id, c_nombre, c_estado, ...v }: Row) => ({ ...v, colmena: { id: c_id, nombre: c_nombre, estado: c_estado } })), 'nucleoId');
+  return nucleos.map((n) => ({
+    ...n,
+    apiario: apiarioById.get(n.apiarioId) ?? null,
+    colmenaOrigen: n.colmenaOrigenId ? origenById.get(n.colmenaOrigenId) ?? null : null,
+    donantes: donantesBy.get(n.id) ?? [],
+    eventos: eventosBy.get(n.id) ?? [],
+    ventas: ventasBy.get(n.id) ?? [],
+    conversiones: conversionesBy.get(n.id) ?? [],
+  }));
+}
+
+const loadOne = async (rows: Row[]) => (await withNucleoRelations(rows))[0] ?? null;
 
 const fail = (context: any, status: number, error: string) => {
   context.set.status = status;
   return { success: false, error };
 };
 
-const findOwnedNucleo = (id: string, userId: string) => prisma.nucleo.findFirst({
-  where: { id, apiario: { usuarioId: userId } }, include: includeNucleo,
-});
+const findOwnedNucleo = async (id: string, userId: string) => loadOne(await sql`
+  SELECT n.* FROM nucleos n JOIN apiarios a ON a.id = n."apiarioId"
+  WHERE n.id = ${id} AND a."usuarioId" = ${userId} LIMIT 1`);
 
-const hasOpenCase = async (nucleoId: string) => Boolean(await prisma.casoSanitario.findFirst({
-  where: {
-    anuladoAt: null,
-    estado: { in: ['abierto', 'en_seguimiento'] },
-    objetivos: { some: { nucleoId } },
-  },
-  select: { id: true },
-}));
+const hasOpenCase = async (nucleoId: string) => {
+  const [row] = await sql`
+    SELECT 1 AS found FROM casos_sanitarios c
+    WHERE c."anuladoAt" IS NULL AND c.estado IN ('abierto', 'en_seguimiento')
+      AND EXISTS (SELECT 1 FROM casos_sanitarios_objetivos o WHERE o."casoId" = c.id AND o."nucleoId" = ${nucleoId})
+    LIMIT 1`;
+  return Boolean(row);
+};
+
+const isUniqueViolation = (error: any) => error?.code === '23505' || error?.errno === '23505';
+
+const ownedNucleoRows = (id: string, context: any) => context.user.rol === 'administrador'
+  ? sql`SELECT * FROM nucleos WHERE id = ${id} LIMIT 1`
+  : sql`SELECT n.* FROM nucleos n JOIN apiarios a ON a.id = n."apiarioId" WHERE n.id = ${id} AND a."usuarioId" = ${context.user.id} LIMIT 1`;
 
 const nucleosRoutes = new Elysia({ prefix: '/nucleos' }).use(authGuard);
 
 nucleosRoutes.get('/', async (context: any) => {
-  const where = context.user.rol === 'administrador' ? {} : { apiario: { usuarioId: context.user.id } };
-  const nucleos = await prisma.nucleo.findMany({ where, include: includeNucleo, orderBy: { fechaFormacion: 'desc' } });
-  return { success: true, data: nucleos };
+  const rows = context.user.rol === 'administrador'
+    ? await sql`SELECT * FROM nucleos ORDER BY "fechaFormacion" DESC`
+    : await sql`SELECT n.* FROM nucleos n JOIN apiarios a ON a.id = n."apiarioId" WHERE a."usuarioId" = ${context.user.id} ORDER BY n."fechaFormacion" DESC`;
+  return { success: true, data: await withNucleoRelations(rows) };
 });
 
 nucleosRoutes.get('/:id', async (context: any) => {
-  const nucleo = await prisma.nucleo.findFirst({
-    where: { id: context.params.id, ...(context.user.rol === 'administrador' ? {} : { apiario: { usuarioId: context.user.id } }) },
-    include: includeNucleo,
-  });
+  const nucleo = await loadOne(await ownedNucleoRows(context.params.id, context));
   return nucleo ? { success: true, data: nucleo } : fail(context, 404, 'Núcleo no encontrado');
 });
 
 nucleosRoutes.get('/:id/trazabilidad', async (context: any) => {
-  const nucleo = await prisma.nucleo.findFirst({
-    where: { id: context.params.id, ...(context.user.rol === 'administrador' ? {} : { apiario: { usuarioId: context.user.id } }) },
-    include: {
-      ...includeNucleo,
-      inspecciones: { where: { anuladoAt: null }, orderBy: { fecha: 'desc' } },
-      casosSanitarios: { include: { caso: { include: { patologia: true, acciones: { where: { anuladoAt: null } } } } } },
-    },
-  });
-  return nucleo ? { success: true, data: nucleo } : fail(context, 404, 'Núcleo no encontrado');
+  const nucleo = await loadOne(await ownedNucleoRows(context.params.id, context));
+  if (!nucleo) return fail(context, 404, 'Núcleo no encontrado');
+
+  // _NucleoToInspeccion: A = inspección, B = núcleo
+  const inspecciones = await sql`
+    SELECT i.* FROM "_NucleoToInspeccion" r JOIN inspecciones i ON i.id = r."A"
+    WHERE r."B" = ${nucleo.id} AND i."anuladoAt" IS NULL ORDER BY i.fecha DESC`;
+  const objetivos = await sql`SELECT * FROM casos_sanitarios_objetivos WHERE "nucleoId" = ${nucleo.id}`;
+  let casosSanitarios: Row[] = [];
+  if (objetivos.length) {
+    const casoIds = sql.array(objetivos.map((o: Row) => o.casoId as string), 'TEXT');
+    const [casos, patologias, acciones] = await Promise.all([
+      sql`SELECT * FROM casos_sanitarios WHERE id = ANY(${casoIds})`,
+      sql`SELECT p.* FROM patologias_sanitarias p WHERE p.id IN (SELECT "patologiaId" FROM casos_sanitarios WHERE id = ANY(${casoIds}))`,
+      sql`SELECT * FROM acciones_sanitarias WHERE "casoId" = ANY(${casoIds}) AND "anuladoAt" IS NULL`,
+    ]);
+    const patologiaById = byId(patologias);
+    const accionesBy = group(acciones, 'casoId');
+    const casoById = new Map(casos.map((c: Row) => [c.id, { ...c, patologia: c.patologiaId ? patologiaById.get(c.patologiaId) ?? null : null, acciones: accionesBy.get(c.id) ?? [] }]));
+    casosSanitarios = objetivos.map((o: Row) => ({ ...o, caso: casoById.get(o.casoId) }));
+  }
+  return { success: true, data: { ...nucleo, inspecciones, casosSanitarios } };
 });
 
 nucleosRoutes.post('/', async (context: any) => {
@@ -103,43 +155,42 @@ nucleosRoutes.post('/', async (context: any) => {
   const parsed = createSchema.safeParse(context.body);
   if (!parsed.success) return fail(context, 400, parsed.error.issues[0]?.message || 'Datos inválidos');
   const data = parsed.data;
-  const apiario = await prisma.apiario.findFirst({ where: { id: data.apiarioId, usuarioId: context.user.id } });
+  const [apiario] = await sql`SELECT * FROM apiarios WHERE id = ${data.apiarioId} AND "usuarioId" = ${context.user.id} LIMIT 1`;
   if (!apiario) return fail(context, 404, 'Apiario no encontrado');
 
   const donorIds = Array.from(new Set([...data.donanteIds, ...(data.colmenaOrigenId ? [data.colmenaOrigenId] : [])]));
   if (donorIds.length) {
-    const donors = await prisma.colmena.count({ where: { id: { in: donorIds }, apiarioId: apiario.id, usuarioId: context.user.id } });
+    const [{ n: donors }] = await sql`SELECT count(*)::int AS n FROM colmenas WHERE id = ANY(${sql.array(donorIds, 'TEXT')}) AND "apiarioId" = ${apiario.id} AND "usuarioId" = ${context.user.id}`;
     if (donors !== donorIds.length) return fail(context, 400, 'Todas las colmenas donantes deben pertenecer al apiario');
   }
 
   try {
-    const nucleo = await prisma.$transaction(async (tx) => {
-      const created = await tx.nucleo.create({
-        data: {
-          numero: data.numero,
-          codigo: data.codigo,
-          tipo: data.tipo,
-          estado: data.estado,
-          fechaInstalacion: data.fechaFormacion ? new Date(data.fechaFormacion) : new Date(),
-          fechaFormacion: data.fechaFormacion ? new Date(data.fechaFormacion) : new Date(),
-          apiarioId: apiario.id,
-          colmenaOrigenId: data.colmenaOrigenId,
-          origenReina: data.origenReina,
-          detalleOrigenReina: data.detalleOrigenReina,
-          proveedorReina: data.proveedorReina,
-          donantes: { create: donorIds.map((colmenaId) => ({ colmenaId })) },
-          eventos: { create: { tipo: 'creado', detalle: `Núcleo ${data.codigo} formado en ${apiario.nombre}`, registradoPorId: context.user.id } },
-        },
-        include: includeNucleo,
-      });
-      return created;
+    const created = await sql.begin(async (tx) => {
+      const fechaFormacion = data.fechaFormacion ? new Date(data.fechaFormacion) : new Date();
+      const row = await insert('nucleos', {
+        numero: data.numero,
+        codigo: data.codigo,
+        tipo: data.tipo,
+        estado: data.estado,
+        fechaInstalacion: fechaFormacion,
+        fechaFormacion,
+        apiarioId: apiario.id,
+        colmenaOrigenId: data.colmenaOrigenId,
+        origenReina: data.origenReina,
+        detalleOrigenReina: data.detalleOrigenReina,
+        proveedorReina: data.proveedorReina,
+      }, tx as any);
+      for (const colmenaId of donorIds) await insert('nucleos_donantes', { nucleoId: row.id, colmenaId }, tx as any);
+      await insert('eventos_nucleo', { nucleoId: row.id, tipo: 'creado', detalle: `Núcleo ${data.codigo} formado en ${apiario.nombre}`, registradoPorId: context.user.id }, tx as any);
+      return row;
     });
+    const nucleo = await loadOne([created]);
 
     AlertService.createRecurrentAlertsForEntity('nucleo', nucleo.id, `Núcleo ${nucleo.codigo}`, context.user.id).catch(console.error);
     context.set.status = 201;
     return { success: true, data: nucleo, message: 'Núcleo registrado con trazabilidad' };
   } catch (error: any) {
-    if (error.code === 'P2002') return fail(context, 409, 'El código del núcleo ya existe en este apiario');
+    if (isUniqueViolation(error)) return fail(context, 409, 'El código del núcleo ya existe en este apiario');
     throw error;
   }
 });
@@ -152,14 +203,12 @@ nucleosRoutes.patch('/:id', async (context: any) => {
   if (!nucleo) return fail(context, 404, 'Núcleo no encontrado');
   if (['convertido', 'vendido', 'destruido', 'anulado'].includes(nucleo.estado)) return fail(context, 409, 'Un núcleo cerrado no puede editarse');
 
-  const updated = await prisma.$transaction(async (tx) => {
-    const result = await tx.nucleo.update({ where: { id: nucleo.id }, data: parsed.data, include: includeNucleo });
-    await tx.eventoNucleo.create({
-      data: { nucleoId: nucleo.id, tipo: parsed.data.estado && parsed.data.estado !== nucleo.estado ? 'cambio_estado' : 'actualizado', detalle: 'Datos del núcleo actualizados', datos: parsed.data, registradoPorId: context.user.id },
-    });
-    return result;
+  const updatedRow = await sql.begin(async (tx) => {
+    const result = await updateById('nucleos', nucleo.id, parsed.data, tx as any);
+    await insert('eventos_nucleo', { nucleoId: nucleo.id, tipo: parsed.data.estado && parsed.data.estado !== nucleo.estado ? 'cambio_estado' : 'actualizado', detalle: 'Datos del núcleo actualizados', datos: JSON.stringify(parsed.data), registradoPorId: context.user.id }, tx as any);
+    return result!;
   });
-  return { success: true, data: updated };
+  return { success: true, data: await loadOne([updatedRow]) };
 });
 
 nucleosRoutes.post('/:id/conversiones', async (context: any) => {
@@ -170,16 +219,16 @@ nucleosRoutes.post('/:id/conversiones', async (context: any) => {
   if (!nucleo) return fail(context, 404, 'Núcleo no encontrado');
   const policyError = validateNucleusFinalization(nucleo.estado, await hasOpenCase(nucleo.id));
   if (policyError) return fail(context, 409, policyError);
-  const apiario = await prisma.apiario.findFirst({ where: { id: parsed.data.apiarioId, usuarioId: context.user.id } });
+  const [apiario] = await sql`SELECT * FROM apiarios WHERE id = ${parsed.data.apiarioId} AND "usuarioId" = ${context.user.id} LIMIT 1`;
   if (!apiario) return fail(context, 404, 'Apiario de destino no encontrado');
 
-  const conversion = await prisma.$transaction(async (tx) => {
+  const conversion = await sql.begin(async (tx) => {
     const fecha = parsed.data.fecha ? new Date(parsed.data.fecha) : new Date();
-    const colmena = await tx.colmena.create({ data: { nombre: parsed.data.nombreColmena, estado: 'activa', fechaInstalacion: fecha, apiarioId: apiario.id, usuarioId: context.user.id } });
-    const result = await tx.conversionNucleo.create({ data: { nucleoId: nucleo.id, colmenaId: colmena.id, fecha, observaciones: parsed.data.observaciones, creadoPorId: context.user.id }, include: { colmena: true } });
-    await tx.nucleo.update({ where: { id: nucleo.id }, data: { estado: 'convertido' } });
-    await tx.eventoNucleo.create({ data: { nucleoId: nucleo.id, tipo: 'convertido', detalle: `Convertido en colmena ${colmena.nombre}`, datos: { colmenaId: colmena.id, apiarioId: apiario.id }, registradoPorId: context.user.id } });
-    return result;
+    const colmena = await insert('colmenas', { nombre: parsed.data.nombreColmena, estado: 'activa', fechaInstalacion: fecha, apiarioId: apiario.id, usuarioId: context.user.id }, tx as any);
+    const result = await insert('conversiones_nucleo', { nucleoId: nucleo.id, colmenaId: colmena.id, fecha, observaciones: parsed.data.observaciones, creadoPorId: context.user.id }, tx as any);
+    await updateById('nucleos', nucleo.id, { estado: 'convertido' }, tx as any);
+    await insert('eventos_nucleo', { nucleoId: nucleo.id, tipo: 'convertido', detalle: `Convertido en colmena ${colmena.nombre}`, datos: JSON.stringify({ colmenaId: colmena.id, apiarioId: apiario.id }), registradoPorId: context.user.id }, tx as any);
+    return { ...result, colmena };
   });
   context.set.status = 201;
   return { success: true, data: conversion, message: 'Núcleo convertido conservando su linaje' };
@@ -194,13 +243,13 @@ nucleosRoutes.post('/:id/ventas', async (context: any) => {
   const policyError = validateNucleusFinalization(nucleo.estado, await hasOpenCase(nucleo.id));
   if (policyError) return fail(context, 409, policyError);
 
-  const venta = await prisma.$transaction(async (tx) => {
+  const venta = await sql.begin(async (tx) => {
     const fecha = parsed.data.fecha ? new Date(parsed.data.fecha) : new Date();
-    const transaccion = await tx.transaccion.create({ data: { tipo: 'ingreso', descripcion: `Venta del núcleo ${nucleo.codigo} a ${parsed.data.compradorNombre}`, monto: parsed.data.monto, fecha, categoria: 'venta_nucleo', referencia: parsed.data.comprobantePath, esVenta: true, producto: `Núcleo ${nucleo.codigo}`, cantidad: 1, unidad: 'unidad', compradorNombre: parsed.data.compradorNombre, valorTotal: parsed.data.monto, estadoPago: 'pagado', origen: 'venta_nucleo', usuarioId: context.user.id } });
-    const result = await tx.ventaNucleo.create({ data: { ...parsed.data, fecha, nucleoId: nucleo.id, transaccionId: transaccion.id, creadoPorId: context.user.id }, include: { transaccion: true } });
-    await tx.nucleo.update({ where: { id: nucleo.id }, data: { estado: 'vendido' } });
-    await tx.eventoNucleo.create({ data: { nucleoId: nucleo.id, tipo: 'vendido', detalle: `Vendido a ${parsed.data.compradorNombre}; destino: ${parsed.data.destinoApiario}`, datos: { ventaId: result.id, transaccionId: transaccion.id }, registradoPorId: context.user.id } });
-    return result;
+    const transaccion = await insert('transacciones', { tipo: 'ingreso', descripcion: `Venta del núcleo ${nucleo.codigo} a ${parsed.data.compradorNombre}`, monto: parsed.data.monto, fecha, categoria: 'venta_nucleo', referencia: parsed.data.comprobantePath, esVenta: true, producto: `Núcleo ${nucleo.codigo}`, cantidad: 1, unidad: 'unidad', compradorNombre: parsed.data.compradorNombre, valorTotal: parsed.data.monto, estadoPago: 'pagado', origen: 'venta_nucleo', usuarioId: context.user.id }, tx as any);
+    const result = await insert('ventas_nucleo', { ...parsed.data, fecha, nucleoId: nucleo.id, transaccionId: transaccion.id, creadoPorId: context.user.id }, tx as any);
+    await updateById('nucleos', nucleo.id, { estado: 'vendido' }, tx as any);
+    await insert('eventos_nucleo', { nucleoId: nucleo.id, tipo: 'vendido', detalle: `Vendido a ${parsed.data.compradorNombre}; destino: ${parsed.data.destinoApiario}`, datos: JSON.stringify({ ventaId: result.id, transaccionId: transaccion.id }), registradoPorId: context.user.id }, tx as any);
+    return { ...result, transaccion };
   });
   context.set.status = 201;
   return { success: true, data: venta, message: 'Venta e ingreso financiero registrados' };
@@ -209,13 +258,14 @@ nucleosRoutes.post('/:id/ventas', async (context: any) => {
 nucleosRoutes.post('/:id/anulaciones', async (context: any) => {
   const parsed = z.object({ motivo: z.string().trim().min(5).max(1000) }).safeParse(context.body);
   if (!parsed.success) return fail(context, 400, 'El motivo es obligatorio');
-  const nucleo = await prisma.nucleo.findUnique({ where: { id: context.params.id }, include: { apiario: true } });
+  const [nucleo] = await sql`
+    SELECT n.*, a."usuarioId" AS "apiarioUsuarioId" FROM nucleos n JOIN apiarios a ON a.id = n."apiarioId" WHERE n.id = ${context.params.id}`;
   if (!nucleo) return fail(context, 404, 'Núcleo no encontrado');
-  if (context.user.rol !== 'administrador' && nucleo.apiario.usuarioId !== context.user.id) return fail(context, 403, 'No tienes permisos');
+  if (context.user.rol !== 'administrador' && nucleo.apiarioUsuarioId !== context.user.id) return fail(context, 403, 'No tienes permisos');
   if (['convertido', 'vendido', 'destruido'].includes(nucleo.estado)) return fail(context, 409, 'El resultado final debe anularse desde su venta, conversión o caso sanitario');
-  const updated = await prisma.$transaction(async (tx) => {
-    const result = await tx.nucleo.update({ where: { id: nucleo.id }, data: { estado: 'anulado' } });
-    await tx.eventoNucleo.create({ data: { nucleoId: nucleo.id, tipo: 'anulado', detalle: parsed.data.motivo, registradoPorId: context.user.id } });
+  const updated = await sql.begin(async (tx) => {
+    const result = await updateById('nucleos', nucleo.id, { estado: 'anulado' }, tx as any);
+    await insert('eventos_nucleo', { nucleoId: nucleo.id, tipo: 'anulado', detalle: parsed.data.motivo, registradoPorId: context.user.id }, tx as any);
     return result;
   });
   return { success: true, data: updated };
@@ -224,15 +274,18 @@ nucleosRoutes.post('/:id/anulaciones', async (context: any) => {
 nucleosRoutes.post('/:id/ventas/:ventaId/anulaciones', async (context: any) => {
   const parsed = z.object({ motivo: z.string().trim().min(5).max(1000) }).safeParse(context.body);
   if (!parsed.success) return fail(context, 400, 'El motivo es obligatorio');
-  const venta = await prisma.ventaNucleo.findFirst({ where: { id: context.params.ventaId, nucleoId: context.params.id }, include: { nucleo: { include: { apiario: true } } } });
+  const [venta] = await sql`
+    SELECT v.*, a."usuarioId" AS "apiarioUsuarioId" FROM ventas_nucleo v
+    JOIN nucleos n ON n.id = v."nucleoId" JOIN apiarios a ON a.id = n."apiarioId"
+    WHERE v.id = ${context.params.ventaId} AND v."nucleoId" = ${context.params.id} LIMIT 1`;
   if (!venta) return fail(context, 404, 'Venta no encontrada');
-  if (context.user.rol !== 'administrador' && venta.nucleo.apiario.usuarioId !== context.user.id) return fail(context, 403, 'No tienes permisos');
+  if (context.user.rol !== 'administrador' && venta.apiarioUsuarioId !== context.user.id) return fail(context, 403, 'No tienes permisos');
   if (venta.anuladoAt) return fail(context, 409, 'La venta ya está anulada');
-  await prisma.$transaction(async (tx) => {
-    await tx.ventaNucleo.update({ where: { id: venta.id }, data: { anuladoAt: new Date(), anuladoPorId: context.user.id, motivoAnulacion: parsed.data.motivo } });
-    await tx.transaccion.update({ where: { id: venta.transaccionId }, data: { anuladoAt: new Date(), anuladoPorId: context.user.id, motivoAnulacion: parsed.data.motivo } });
-    await tx.nucleo.update({ where: { id: venta.nucleoId }, data: { estado: 'listo' } });
-    await tx.eventoNucleo.create({ data: { nucleoId: venta.nucleoId, tipo: 'anulado', detalle: `Venta anulada: ${parsed.data.motivo}`, registradoPorId: context.user.id } });
+  await sql.begin(async (tx) => {
+    await updateById('ventas_nucleo', venta.id, { anuladoAt: new Date(), anuladoPorId: context.user.id, motivoAnulacion: parsed.data.motivo }, tx as any);
+    await updateById('transacciones', venta.transaccionId, { anuladoAt: new Date(), anuladoPorId: context.user.id, motivoAnulacion: parsed.data.motivo }, tx as any);
+    await updateById('nucleos', venta.nucleoId, { estado: 'listo' }, tx as any);
+    await insert('eventos_nucleo', { nucleoId: venta.nucleoId, tipo: 'anulado', detalle: `Venta anulada: ${parsed.data.motivo}`, registradoPorId: context.user.id }, tx as any);
   });
   return { success: true, message: 'Venta e ingreso anulados; la trazabilidad fue conservada' };
 });
@@ -240,31 +293,32 @@ nucleosRoutes.post('/:id/ventas/:ventaId/anulaciones', async (context: any) => {
 nucleosRoutes.post('/:id/conversiones/:conversionId/anulaciones', async (context: any) => {
   const parsed = z.object({ motivo: z.string().trim().min(5).max(1000) }).safeParse(context.body);
   if (!parsed.success) return fail(context, 400, 'El motivo es obligatorio');
-  const conversion = await prisma.conversionNucleo.findFirst({
-    where: { id: context.params.conversionId, nucleoId: context.params.id },
-    include: { nucleo: { include: { apiario: true } } },
-  });
+  const [conversion] = await sql`
+    SELECT v.*, a."usuarioId" AS "apiarioUsuarioId" FROM conversiones_nucleo v
+    JOIN nucleos n ON n.id = v."nucleoId" JOIN apiarios a ON a.id = n."apiarioId"
+    WHERE v.id = ${context.params.conversionId} AND v."nucleoId" = ${context.params.id} LIMIT 1`;
   if (!conversion) return fail(context, 404, 'Conversión no encontrada');
-  if (context.user.rol !== 'administrador' && conversion.nucleo.apiario.usuarioId !== context.user.id) return fail(context, 403, 'No tienes permisos');
+  if (context.user.rol !== 'administrador' && conversion.apiarioUsuarioId !== context.user.id) return fail(context, 403, 'No tienes permisos');
   if (conversion.anuladoAt) return fail(context, 409, 'La conversión ya está anulada');
 
+  const colmenaId = conversion.colmenaId;
   const [inspecciones, producciones, enjambres, casos, nucleosOrigen, nucleosDonados] = await Promise.all([
-    prisma.inspeccion.count({ where: { anuladoAt: null, colmenas: { some: { id: conversion.colmenaId } } } }),
-    prisma.produccion.count({ where: { colmenaId: conversion.colmenaId } }),
-    prisma.enjambre.count({ where: { colmenaId: conversion.colmenaId } }),
-    prisma.casoSanitarioObjetivo.count({ where: { colmenaId: conversion.colmenaId, caso: { anuladoAt: null } } }),
-    prisma.nucleo.count({ where: { colmenaOrigenId: conversion.colmenaId, estado: { not: 'anulado' } } }),
-    prisma.nucleoDonante.count({ where: { colmenaId: conversion.colmenaId, nucleo: { estado: { not: 'anulado' } } } }),
-  ]);
+    sql`SELECT count(*)::int AS n FROM inspecciones i WHERE i."anuladoAt" IS NULL AND EXISTS (SELECT 1 FROM "_ColmenaToInspeccion" r WHERE r."B" = i.id AND r."A" = ${colmenaId})`,
+    sql`SELECT count(*)::int AS n FROM producciones WHERE "colmenaId" = ${colmenaId}`,
+    sql`SELECT count(*)::int AS n FROM enjambres WHERE "colmenaId" = ${colmenaId}`,
+    sql`SELECT count(*)::int AS n FROM casos_sanitarios_objetivos o JOIN casos_sanitarios c ON c.id = o."casoId" WHERE o."colmenaId" = ${colmenaId} AND c."anuladoAt" IS NULL`,
+    sql`SELECT count(*)::int AS n FROM nucleos WHERE "colmenaOrigenId" = ${colmenaId} AND estado <> 'anulado'`,
+    sql`SELECT count(*)::int AS n FROM nucleos_donantes d JOIN nucleos n ON n.id = d."nucleoId" WHERE d."colmenaId" = ${colmenaId} AND n.estado <> 'anulado'`,
+  ]).then((results) => results.map((r) => r[0].n as number));
   if ([inspecciones, producciones, enjambres, casos, nucleosOrigen, nucleosDonados].some(Boolean)) {
     return fail(context, 409, 'La colmena resultante ya tiene actividad posterior; la conversión no puede anularse');
   }
 
-  await prisma.$transaction(async (tx) => {
-    await tx.conversionNucleo.update({ where: { id: conversion.id }, data: { anuladoAt: new Date(), anuladoPorId: context.user.id, motivoAnulacion: parsed.data.motivo } });
-    await tx.colmena.update({ where: { id: conversion.colmenaId }, data: { estado: 'abandonada' } });
-    await tx.nucleo.update({ where: { id: conversion.nucleoId }, data: { estado: 'listo' } });
-    await tx.eventoNucleo.create({ data: { nucleoId: conversion.nucleoId, tipo: 'anulado', detalle: `Conversión anulada: ${parsed.data.motivo}`, datos: { conversionId: conversion.id, colmenaId: conversion.colmenaId }, registradoPorId: context.user.id } });
+  await sql.begin(async (tx) => {
+    await updateById('conversiones_nucleo', conversion.id, { anuladoAt: new Date(), anuladoPorId: context.user.id, motivoAnulacion: parsed.data.motivo }, tx as any);
+    await updateById('colmenas', conversion.colmenaId, { estado: 'abandonada' }, tx as any);
+    await updateById('nucleos', conversion.nucleoId, { estado: 'listo' }, tx as any);
+    await insert('eventos_nucleo', { nucleoId: conversion.nucleoId, tipo: 'anulado', detalle: `Conversión anulada: ${parsed.data.motivo}`, datos: JSON.stringify({ conversionId: conversion.id, colmenaId: conversion.colmenaId }), registradoPorId: context.user.id }, tx as any);
   });
   return { success: true, message: 'Conversión anulada; la colmena resultante quedó inactiva y la trazabilidad fue conservada' };
 });

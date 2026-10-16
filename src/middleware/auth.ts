@@ -3,7 +3,7 @@ import jwt from 'jsonwebtoken';
 import type { Usuario } from '../types/apicola';
 import logger from '../utils/logger';
 import { auth as firebaseAuth } from '../firebase';
-import prisma from '../prisma/client';
+import { sql, type Row } from '../db';
 import {
   AuthenticationError,
   getBearerToken,
@@ -12,7 +12,7 @@ import {
 
 export interface AuthUser extends Omit<Usuario, 'password'> {}
 
-const toAuthUser = (user: Awaited<ReturnType<typeof prisma.usuario.findFirstOrThrow>>): AuthUser => ({
+const toAuthUser = (user: Row): AuthUser => ({
   id: user.id,
   email: user.email,
   rol: user.rol,
@@ -55,12 +55,9 @@ export const authenticateToken = async ({ headers }: { headers: Record<string, s
       throw new AuthenticationError();
     }
 
-    const user = await prisma.usuario.findFirst({
-      where: {
-        activo: true,
-        ...(userLookup.id ? { id: userLookup.id } : { email: userLookup.email! }),
-      },
-    });
+    const [user] = userLookup.id
+      ? await sql`SELECT * FROM usuarios WHERE activo = true AND id = ${userLookup.id} LIMIT 1`
+      : await sql`SELECT * FROM usuarios WHERE activo = true AND email = ${userLookup.email!} LIMIT 1`;
 
     if (!user) {
       throw new AuthenticationError('Usuario no encontrado o inactivo');

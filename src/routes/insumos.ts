@@ -1,14 +1,17 @@
 import { Elysia, t } from 'elysia';
 import { authenticateToken } from '../middleware/auth';
 import { ApiResponse, InsumoApicola } from '../types/apicola';
-import { InsumoApicola as PrismaInsumoApicola } from '../generated/prisma/client';
-import prisma from '../prisma/client';
-import { CategoriaInsumo, EstadoStock } from '../generated/prisma/client';
+import { sql, insert, updateById, updateWhere, type Row } from '../db';
+import { EstadoStock } from '../db/enums';
+
+type InsumoRow = Row & { cantidadActual: number; cantidadMinima: number; precioUnitario: number | null; valorMercado: number | null; categoria: string };
 import { z } from 'zod';
-import { validateInventorySource } from '../services/inventoryPolicy';
+import { inventoryPurchaseTotal, validateInventorySource } from '../services/inventoryPolicy';
+import { recordInventoryExpense } from '../services/inventoryPurchases';
 
 // Esquemas de validación con Zod
 const createInsumoSchema = z.object({
+  registrarCompra: z.boolean().default(false),
   catalogoItemId: z.string().trim().optional(),
   esPersonalizado: z.boolean().default(false),
   nombre: z.string().trim().min(2, 'Nombre es requerido').max(120),
@@ -38,6 +41,8 @@ const createInsumoSchema = z.object({
 const updateInsumoSchema = createInsumoSchema.partial();
 
 const movimientoSchema = z.object({
+  registrarCompra: z.boolean().default(false),
+  precioCompraUnitario: z.number().finite().positive().optional(),
   tipo: z.enum(['entrada', 'salida', 'ajuste']),
   cantidad: z.number().finite().min(0),
   motivo: z.string().trim().min(2, 'Indica el motivo del movimiento').max(240)
@@ -57,7 +62,7 @@ const insumosRoutes = new Elysia({ prefix: '/insumos' });
 // Catálogo maestro: nombres, categorías y unidades estandarizadas por el sistema
 insumosRoutes.get('/catalogo', async ({ headers }) => {
   await authenticateToken({ headers });
-  const items = await prisma.catalogoItemInventario.findMany({ where: { activo: true }, orderBy: [{ tipoItem: 'asc' }, { nombre: 'asc' }] });
+  const items = await sql`SELECT * FROM catalogo_items_inventario WHERE activo = true ORDER BY "tipoItem" ASC, nombre ASC`;
   return { success: true, data: items } as ApiResponse;
 });
 
@@ -79,31 +84,17 @@ insumosRoutes.get('/', async ({ headers, query }) => {
 
     const { page = 1, limit = 50, categoria, search } = validatedQuery.data;
 
-    const where: any = { usuarioId: userId, anuladoAt: null };
+    const filters = sql`"usuarioId" = ${userId} AND "anuladoAt" IS NULL
+      ${categoria && categoria !== 'todos' ? sql`AND categoria = ${categoria}` : sql``}
+      ${search ? sql`AND nombre ILIKE ${'%' + search.replace(/[\\%_]/g, '\\$&') + '%'}` : sql``}`;
 
-    if (categoria && categoria !== 'todos') {
-      where.categoria = categoria as CategoriaInsumo;
-    }
-
-    if (search) {
-      where.nombre = {
-        contains: search,
-        mode: 'insensitive'
-      };
-    }
-
-    const [insumos, total] = await Promise.all([
-      prisma.insumoApicola.findMany({
-        where,
-        orderBy: { fechaCreacion: 'desc' },
-        skip: (page - 1) * limit,
-        take: limit,
-      }),
-      prisma.insumoApicola.count({ where })
+    const [insumos, [{ n: total }]] = await Promise.all([
+      sql`SELECT * FROM insumos_apicola WHERE ${filters} ORDER BY "fechaCreacion" DESC LIMIT ${limit} OFFSET ${(page - 1) * limit}`,
+      sql`SELECT count(*)::int AS n FROM insumos_apicola WHERE ${filters}`,
     ]);
 
     // Calcular porcentaje de stock para cada insumo
-    const insumosConPorcentaje = insumos.map((insumo: PrismaInsumoApicola) => ({
+    const insumosConPorcentaje = insumos.map((insumo: InsumoRow) => ({
       ...insumo,
       porcentajeStock: insumo.cantidadMinima > 0
         ? Math.min((insumo.cantidadActual / insumo.cantidadMinima) * 100, 100)
@@ -138,13 +129,7 @@ insumosRoutes.get('/:id', async ({ params, headers }) => {
     const userId = user?.id;
     const { id } = params;
 
-    const insumo = await prisma.insumoApicola.findFirst({
-      where: {
-        id,
-        usuarioId: userId,
-        anuladoAt: null
-      }
-    });
+    const [insumo] = await sql`SELECT * FROM insumos_apicola WHERE id = ${id} AND "usuarioId" = ${userId} AND "anuladoAt" IS NULL LIMIT 1`;
 
     if (!insumo) {
       return {
@@ -176,7 +161,7 @@ insumosRoutes.get('/:id', async ({ params, headers }) => {
 });
 
 // POST /insumos - Crear nuevo insumo
-insumosRoutes.post('/', async ({ body, headers }) => {
+insumosRoutes.post('/', async ({ body, headers, set }) => {
   try {
     // Validar datos de entrada
     const validatedBody = createInsumoSchema.safeParse(body);
@@ -198,38 +183,40 @@ insumosRoutes.post('/', async ({ body, headers }) => {
       return { success: false, error: 'Registra el precio de compra o el valor de mercado' } as ApiResponse;
     }
     const catalogItem = insumoData.catalogoItemId
-      ? await prisma.catalogoItemInventario.findFirst({ where: { id: insumoData.catalogoItemId, activo: true } })
+      ? (await sql`SELECT * FROM catalogo_items_inventario WHERE id = ${insumoData.catalogoItemId} AND activo = true LIMIT 1`)[0] ?? null
       : null;
     if (!insumoData.esPersonalizado && !catalogItem) return { success: false, error: 'El artículo seleccionado no pertenece al catálogo activo' } as ApiResponse;
 
-    const nuevoInsumo = await prisma.insumoApicola.create({
-      data: {
-        nombre: catalogItem?.nombre ?? insumoData.nombre.trim(),
-        categoria: catalogItem?.categoria ?? insumoData.categoria,
-        descripcion: insumoData.descripcion,
-        cantidadActual: insumoData.cantidadActual,
-        cantidadMinima: insumoData.cantidadMinima,
-        unidad: catalogItem?.unidad ?? insumoData.unidad.trim(),
-        precioUnitario: insumoData.precioUnitario,
-        valorMercado: insumoData.valorMercado,
-        ubicacion: insumoData.ubicacion,
-        fechaCaducidad: insumoData.fechaCaducidad ? new Date(insumoData.fechaCaducidad) : null,
-        lote: insumoData.lote,
-        proveedor: insumoData.proveedor,
-        notas: insumoData.notas,
-        usuarioId: userId,
-        tipoItem: catalogItem?.tipoItem ?? insumoData.tipoItem,
-        estadoActivo: (catalogItem?.tipoItem ?? insumoData.tipoItem) === 'activo' ? (insumoData.estadoActivo || 'disponible') : null,
-        codigoInterno: insumoData.codigoInterno,
-        catalogoItemId: catalogItem?.id ?? null
+    let purchaseTotal = 0;
+    try { purchaseTotal = inventoryPurchaseTotal({ isPurchase: insumoData.registrarCompra, type: 'entrada', quantity: insumoData.cantidadActual, unitCost: insumoData.precioUnitario }); }
+    catch (error) { set.status = 400; return { success: false, error: (error as Error).message }; }
+    const nuevoInsumo = await sql.begin(async tx => {
+    const item = await insert('insumos_apicola', {
+      nombre: catalogItem?.nombre ?? insumoData.nombre.trim(),
+      categoria: catalogItem?.categoria ?? insumoData.categoria,
+      descripcion: insumoData.descripcion,
+      cantidadActual: insumoData.cantidadActual,
+      cantidadMinima: insumoData.cantidadMinima,
+      unidad: catalogItem?.unidad ?? insumoData.unidad.trim(),
+      precioUnitario: insumoData.precioUnitario,
+      valorMercado: insumoData.valorMercado,
+      ubicacion: insumoData.ubicacion,
+      fechaCaducidad: insumoData.fechaCaducidad ? new Date(insumoData.fechaCaducidad) : null,
+      lote: insumoData.lote,
+      proveedor: insumoData.proveedor,
+      notas: insumoData.notas,
+      usuarioId: userId,
+      tipoItem: catalogItem?.tipoItem ?? insumoData.tipoItem,
+      estadoActivo: (catalogItem?.tipoItem ?? insumoData.tipoItem) === 'activo' ? (insumoData.estadoActivo || 'disponible') : null,
+      codigoInterno: insumoData.codigoInterno,
+      catalogoItemId: catalogItem?.id ?? null
+    }, tx as any);
+      if (item.cantidadActual > 0) {
+        const movement = await insert('movimientos_inventario', { insumoId: item.id, tipo: 'entrada', cantidad: item.cantidadActual, cantidadAnterior: 0, cantidadNueva: item.cantidadActual, motivo: insumoData.registrarCompra ? 'Compra inicial' : 'Cantidad inicial', registradoPorId: userId }, tx as any);
+        await recordInventoryExpense(tx as any, item, movement, userId!, purchaseTotal);
       }
+      return item;
     });
-
-    if (nuevoInsumo.cantidadActual > 0) {
-      await prisma.movimientoInventario.create({
-        data: { insumoId: nuevoInsumo.id, tipo: 'entrada', cantidad: nuevoInsumo.cantidadActual, cantidadAnterior: 0, cantidadNueva: nuevoInsumo.cantidadActual, motivo: 'Cantidad inicial', registradoPorId: userId }
-      });
-    }
 
     const insumoConPorcentaje = {
       ...nuevoInsumo,
@@ -276,20 +263,16 @@ insumosRoutes.put('/:id', async ({ params, body, headers }) => {
       if (sourceError) return { success: false, error: sourceError } as ApiResponse;
     }
     const catalogItem = insumoData.catalogoItemId
-      ? await prisma.catalogoItemInventario.findFirst({ where: { id: insumoData.catalogoItemId, activo: true } })
+      ? (await sql`SELECT * FROM catalogo_items_inventario WHERE id = ${insumoData.catalogoItemId} AND activo = true LIMIT 1`)[0] ?? null
       : null;
     if (insumoData.catalogoItemId && !catalogItem) return { success: false, error: 'El artículo seleccionado no pertenece al catálogo activo' } as ApiResponse;
     if (insumoData.precioUnitario !== undefined && insumoData.valorMercado !== undefined && insumoData.precioUnitario <= 0 && insumoData.valorMercado <= 0) {
       return { success: false, error: 'Registra el precio de compra o el valor de mercado' } as ApiResponse;
     }
 
-    const insumoActualizado = await prisma.insumoApicola.updateMany({
-      where: {
-        id,
-        usuarioId: userId,
-        anuladoAt: null
-      },
-      data: {
+    const actualizados = await updateWhere(
+      'insumos_apicola',
+      {
         nombre: catalogItem?.nombre ?? insumoData.nombre,
         categoria: catalogItem?.categoria ?? insumoData.categoria,
         descripcion: insumoData.descripcion,
@@ -306,19 +289,18 @@ insumosRoutes.put('/:id', async ({ params, body, headers }) => {
         estadoActivo: (catalogItem?.tipoItem ?? insumoData.tipoItem) === 'activo' ? (insumoData.estadoActivo || 'disponible') : null,
         codigoInterno: insumoData.codigoInterno,
         catalogoItemId: insumoData.esPersonalizado === true ? null : catalogItem?.id
-      }
-    });
+      },
+      sql`id = ${id} AND "usuarioId" = ${userId} AND "anuladoAt" IS NULL`
+    );
 
-    if (insumoActualizado.count === 0) {
+    if (actualizados.length === 0) {
       return {
         success: false,
         error: 'Insumo no encontrado o no autorizado'
       } as ApiResponse;
     }
 
-    const insumo = await prisma.insumoApicola.findUnique({
-      where: { id }
-    });
+    const insumo = actualizados[0];
 
     const insumoConPorcentaje = {
       ...insumo,
@@ -346,54 +328,32 @@ insumosRoutes.put('/:id', async ({ params, body, headers }) => {
 insumosRoutes.post('/:id/movimientos', async ({ params, body, headers, set }) => {
   const user = await authenticateToken({ headers });
   const parsed = movimientoSchema.safeParse(body);
-  if (!parsed.success) {
-    set.status = 400;
-    return { success: false, error: parsed.error.issues[0]?.message || 'Movimiento inválido' } as ApiResponse;
-  }
-
-  const item = await prisma.insumoApicola.findFirst({
-    where: { id: params.id, usuarioId: user.id, anuladoAt: null }
+  if (!parsed.success) { set.status = 400; return { success: false, error: parsed.error.issues[0]?.message || 'Movimiento inválido' }; }
+  let purchaseTotal = 0;
+  try { purchaseTotal = inventoryPurchaseTotal({ isPurchase: parsed.data.registrarCompra, type: parsed.data.tipo, quantity: parsed.data.cantidad, unitCost: parsed.data.precioCompraUnitario }); }
+  catch (error) { set.status = 400; return { success: false, error: (error as Error).message }; }
+  return sql.begin(async tx => {
+    const [item] = await tx`SELECT * FROM insumos_apicola WHERE id = ${params.id} AND "usuarioId" = ${user.id} AND "anuladoAt" IS NULL FOR UPDATE`;
+    if (!item) { set.status = 404; return { success: false, error: 'Artículo no encontrado' }; }
+    const previous = item.cantidadActual;
+    const next = parsed.data.tipo === 'entrada' ? previous + parsed.data.cantidad : parsed.data.tipo === 'salida' ? previous - parsed.data.cantidad : parsed.data.cantidad;
+    if (next < 0) { set.status = 409; return { success: false, error: `Solo hay ${previous} ${item.unidad} disponibles` }; }
+    const updated = await updateById('insumos_apicola', item.id, { cantidadActual: next, estadoStock: calcularEstadoStock(next, item.cantidadMinima), precioUnitario: parsed.data.registrarCompra ? parsed.data.precioCompraUnitario : undefined }, tx as any);
+    const movement = await insert('movimientos_inventario', { insumoId: item.id, tipo: parsed.data.tipo, cantidad: parsed.data.cantidad, cantidadAnterior: previous, cantidadNueva: next, motivo: parsed.data.motivo, registradoPorId: user.id }, tx as any);
+    const expense = await recordInventoryExpense(tx as any, item, movement, user.id, purchaseTotal);
+    set.status = 201;
+    return { success: true, data: { item: updated, movimiento: movement, gastoId: expense?.id || null }, message: expense ? 'Compra registrada en inventario y egresos' : 'Movimiento registrado' };
   });
-  if (!item) {
-    set.status = 404;
-    return { success: false, error: 'Artículo no encontrado' } as ApiResponse;
-  }
-
-  const previous = item.cantidadActual;
-  const next = parsed.data.tipo === 'entrada'
-    ? previous + parsed.data.cantidad
-    : parsed.data.tipo === 'salida'
-      ? previous - parsed.data.cantidad
-      : parsed.data.cantidad;
-
-  if (next < 0) {
-    set.status = 409;
-    return { success: false, error: `Solo hay ${previous} ${item.unidad} disponibles` } as ApiResponse;
-  }
-
-  const result = await prisma.$transaction(async (tx) => {
-    const updated = await tx.insumoApicola.update({
-      where: { id: item.id },
-      data: { cantidadActual: next, estadoStock: calcularEstadoStock(next, item.cantidadMinima) }
-    });
-    const movement = await tx.movimientoInventario.create({
-      data: { insumoId: item.id, tipo: parsed.data.tipo, cantidad: parsed.data.cantidad, cantidadAnterior: previous, cantidadNueva: next, motivo: parsed.data.motivo, registradoPorId: user.id }
-    });
-    return { updated, movement };
-  });
-
-  set.status = 201;
-  return { success: true, data: { item: result.updated, movimiento: result.movement }, message: 'Movimiento registrado' } as ApiResponse;
 });
 
 insumosRoutes.get('/:id/movimientos', async ({ params, headers, set }) => {
   const user = await authenticateToken({ headers });
-  const item = await prisma.insumoApicola.findFirst({ where: { id: params.id, usuarioId: user.id } });
+  const [item] = await sql`SELECT * FROM insumos_apicola WHERE id = ${params.id} AND "usuarioId" = ${user.id} LIMIT 1`;
   if (!item) {
     set.status = 404;
     return { success: false, error: 'Artículo no encontrado' } as ApiResponse;
   }
-  const movements = await prisma.movimientoInventario.findMany({ where: { insumoId: item.id }, orderBy: { fecha: 'desc' } });
+  const movements = await sql`SELECT * FROM movimientos_inventario WHERE "insumoId" = ${item.id} ORDER BY fecha DESC`;
   return { success: true, data: movements } as ApiResponse;
 });
 
@@ -405,13 +365,7 @@ insumosRoutes.delete('/:id', async ({ params, headers }) => {
     const { id } = params;
 
     // Verificar que el insumo existe y pertenece al usuario
-    const insumoExistente = await prisma.insumoApicola.findFirst({
-      where: {
-        id,
-        usuarioId: userId,
-        anuladoAt: null
-      }
-    });
+    const [insumoExistente] = await sql`SELECT id FROM insumos_apicola WHERE id = ${id} AND "usuarioId" = ${userId} AND "anuladoAt" IS NULL LIMIT 1`;
 
     if (!insumoExistente) {
       return {
@@ -420,10 +374,7 @@ insumosRoutes.delete('/:id', async ({ params, headers }) => {
       } as ApiResponse;
     }
 
-    await prisma.insumoApicola.update({
-      where: { id },
-      data: { anuladoAt: new Date(), anuladoPorId: userId, motivoAnulacion: 'Dado de baja desde inventario' }
-    });
+    await updateById('insumos_apicola', id, { anuladoAt: new Date(), anuladoPorId: userId, motivoAnulacion: 'Dado de baja desde inventario' });
 
     return {
       success: true,
@@ -444,16 +395,9 @@ insumosRoutes.get('/stats/resumen', async ({ headers }) => {
     const user = await authenticateToken({ headers });
     const userId = user?.id;
 
-    const insumos = await prisma.insumoApicola.findMany({
-      where: { usuarioId: userId, anuladoAt: null },
-      select: {
-        categoria: true,
-        cantidadActual: true,
-        cantidadMinima: true,
-        precioUnitario: true
-        ,valorMercado: true
-      }
-    });
+    const insumos = await sql`
+      SELECT categoria, "cantidadActual", "cantidadMinima", "precioUnitario", "valorMercado"
+      FROM insumos_apicola WHERE "usuarioId" = ${userId} AND "anuladoAt" IS NULL`;
 
     const stats = {
       totalInsumos: insumos.length,
@@ -463,7 +407,7 @@ insumosRoutes.get('/stats/resumen', async ({ headers }) => {
       stockAgotado: 0
     };
 
-    insumos.forEach((insumo: Pick<PrismaInsumoApicola, 'categoria' | 'cantidadActual' | 'cantidadMinima' | 'precioUnitario' | 'valorMercado'>) => {
+    insumos.forEach((insumo: InsumoRow) => {
       // Contar por categoría
       stats.categorias[insumo.categoria] = (stats.categorias[insumo.categoria] || 0) + 1;
 

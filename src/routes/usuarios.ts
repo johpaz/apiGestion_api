@@ -2,30 +2,24 @@ import { Elysia } from 'elysia';
 import { authGuard } from '../middleware/auth';
 import { AuthorizationError, requireRole } from '../middleware/authorization';
 import { ApiResponse, Usuario } from '../types/apicola';
-import { validateUpdateProfile } from '../middleware/validation';
-import prisma from '../prisma/client';
+import { sql, updateById } from '../db';
 
 const usuariosRoutes = new Elysia({ prefix: '/usuarios' })
   .use(authGuard);
+
+// Columnas públicas (nunca incluir password)
+const BASIC_COLS = sql`id, nombre, email, rol, activo, "colmenasAsignadas", "fechaRegistro", "ultimoAcceso", moneda`;
+const PROFILE_COLS = sql`id, nombre, email, rol, activo, "colmenasAsignadas", "fechaRegistro", "ultimoAcceso", moneda, "alertasActivadas", "notificacionesEmail", idioma`;
+
+// Campos que el propio usuario puede modificar de su perfil
+const EDITABLE_PROFILE_FIELDS = ['nombre', 'email', 'moneda', 'imagenPerfil', 'alertasActivadas', 'notificacionesEmail', 'idioma'] as const;
 
 // Get all users (admin only)
 usuariosRoutes.get('/', async (context: any) => {
   try {
     await requireRole(['administrador'])(context.user);
 
-    const usuarios = await prisma.usuario.findMany({
-      select: {
-        id: true,
-        nombre: true,
-        email: true,
-        rol: true,
-        activo: true,
-        colmenasAsignadas: true,
-        fechaRegistro: true,
-        ultimoAcceso: true
-        ,moneda: true
-      }
-    });
+    const usuarios = await sql`SELECT ${BASIC_COLS} FROM usuarios`;
 
     return {
       success: true,
@@ -51,23 +45,7 @@ usuariosRoutes.get('/profile/:userId', async (context: any) => {
       throw new AuthorizationError();
     }
 
-    const user = await prisma.usuario.findUnique({
-      where: { id: userId },
-      select: {
-        id: true,
-        nombre: true,
-        email: true,
-        rol: true,
-        activo: true,
-        colmenasAsignadas: true,
-        fechaRegistro: true,
-        ultimoAcceso: true,
-        moneda: true,
-        alertasActivadas: true,
-        notificacionesEmail: true,
-        idioma: true
-      }
-    });
+    const [user] = await sql`SELECT ${PROFILE_COLS} FROM usuarios WHERE id = ${userId}`;
 
     if (!user) {
       throw new Error('Usuario no encontrado');
@@ -92,43 +70,24 @@ usuariosRoutes.put('/profile', async (context: any) => {
       throw new Error('Usuario no autenticado');
     }
 
-    const updateData = context.body;
+    const body = context.body ?? {};
+    // Solo campos propios del perfil: evita que un usuario se asigne rol, activo o password
+    const updateData: Record<string, unknown> = {};
+    for (const field of EDITABLE_PROFILE_FIELDS) {
+      if (body[field] !== undefined) updateData[field] = body[field];
+    }
 
     // Check if email is being updated and if it's already taken by another user
     if (updateData.email) {
-      const existingUser = await prisma.usuario.findFirst({
-        where: {
-          email: updateData.email,
-          id: { not: userId }
-        }
-      });
+      const [existingUser] = await sql`SELECT id FROM usuarios WHERE email = ${updateData.email as string} AND id <> ${userId}`;
 
       if (existingUser) {
         throw new Error('El email ya está en uso por otro usuario');
       }
     }
 
-    const updatedUser = await prisma.usuario.update({
-      where: { id: userId },
-      data: {
-        ...updateData,
-        ultimoAcceso: new Date()
-      },
-      select: {
-        id: true,
-        nombre: true,
-        email: true,
-        rol: true,
-        activo: true,
-        colmenasAsignadas: true,
-        fechaRegistro: true,
-        ultimoAcceso: true,
-        moneda: true,
-        alertasActivadas: true,
-        notificacionesEmail: true,
-        idioma: true
-      }
-    });
+    await updateById('usuarios', userId, { ...updateData, ultimoAcceso: new Date() });
+    const [updatedUser] = await sql`SELECT ${PROFILE_COLS} FROM usuarios WHERE id = ${userId}`;
 
     return {
       success: true,
@@ -140,6 +99,11 @@ usuariosRoutes.put('/profile', async (context: any) => {
     throw error;
   }
 });
+
+const countActiveAdmins = async () => {
+  const [{ total }] = await sql`SELECT count(*)::int AS total FROM usuarios WHERE rol = 'administrador' AND activo = true`;
+  return total as number;
+};
 
 // Update user status (admin only)
 usuariosRoutes.patch('/:id/status', async (context: any) => {
@@ -154,33 +118,20 @@ usuariosRoutes.patch('/:id/status', async (context: any) => {
       return { success: false, error: 'El estado debe ser booleano' };
     }
 
-    const target = await prisma.usuario.findUnique({ where: { id } });
+    const [target] = await sql`SELECT * FROM usuarios WHERE id = ${id}`;
     if (!target) {
       context.set.status = 404;
       return { success: false, error: 'Usuario no encontrado' };
     }
     if (target.rol === 'administrador' && target.activo && !activo) {
-      const activeAdmins = await prisma.usuario.count({ where: { rol: 'administrador', activo: true } });
-      if (activeAdmins <= 1) {
+      if (await countActiveAdmins() <= 1) {
         context.set.status = 409;
         return { success: false, error: 'No se puede desactivar el último administrador activo' };
       }
     }
 
-    const updatedUser = await prisma.usuario.update({
-      where: { id: id },
-      data: { activo: activo },
-      select: {
-        id: true,
-        nombre: true,
-        email: true,
-        rol: true,
-        activo: true,
-        colmenasAsignadas: true,
-        fechaRegistro: true,
-        ultimoAcceso: true
-      }
-    });
+    await updateById('usuarios', id, { activo });
+    const [updatedUser] = await sql`SELECT ${BASIC_COLS} FROM usuarios WHERE id = ${id}`;
 
     return {
       success: true,
@@ -203,24 +154,20 @@ usuariosRoutes.patch('/:id/role', async (context: any) => {
     context.set.status = 400;
     return { success: false, error: 'Rol inválido' };
   }
-  const target = await prisma.usuario.findUnique({ where: { id } });
+  const [target] = await sql`SELECT * FROM usuarios WHERE id = ${id}`;
   if (!target) {
     context.set.status = 404;
     return { success: false, error: 'Usuario no encontrado' };
   }
   if (target.rol === 'administrador' && rol !== 'administrador' && target.activo) {
-    const activeAdmins = await prisma.usuario.count({ where: { rol: 'administrador', activo: true } });
-    if (activeAdmins <= 1) {
+    if (await countActiveAdmins() <= 1) {
       context.set.status = 409;
       return { success: false, error: 'No se puede cambiar el rol del último administrador activo' };
     }
   }
 
-  const updatedUser = await prisma.usuario.update({
-    where: { id },
-    data: { rol },
-    select: { id: true, nombre: true, email: true, rol: true, activo: true, colmenasAsignadas: true, fechaRegistro: true, ultimoAcceso: true, moneda: true },
-  });
+  await updateById('usuarios', id, { rol });
+  const [updatedUser] = await sql`SELECT ${BASIC_COLS} FROM usuarios WHERE id = ${id}`;
   return { success: true, data: updatedUser, message: 'Rol actualizado exitosamente' };
 });
 

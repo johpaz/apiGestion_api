@@ -1,7 +1,7 @@
 import { Elysia } from 'elysia';
 import { authGuard } from '../middleware/auth';
 import { ApiResponse } from '../types/apicola';
-import prisma from '../prisma/client';
+import { sql } from '../db';
 
 const reportesRoutes = new Elysia({ prefix: '/reportes' })
   .use(authGuard);
@@ -17,34 +17,20 @@ reportesRoutes.get('/metrics', async (context: any) => {
     }
 
     // Total producción de miel en el año
-    const totalProduccionResult = await prisma.produccion.aggregate({
-      where: {
-        usuarioId: userId,
-        tipoProducto: 'miel',
-        fecha: {
-          gte: new Date(year, 0, 1),
-          lt: new Date(year + 1, 0, 1)
-        }
-      },
-      _sum: {
-        cantidad: true
-      }
-    });
+    const [totalProduccionResult] = await sql`
+      SELECT sum(cantidad)::float AS total FROM producciones
+      WHERE "usuarioId" = ${userId} AND "tipoProducto" = 'miel'
+        AND fecha >= ${new Date(year, 0, 1)} AND fecha < ${new Date(year + 1, 0, 1)}`;
 
-    const totalProduccion = totalProduccionResult._sum.cantidad || 0;
+    const totalProduccion = (totalProduccionResult.total as number | null) || 0;
 
     // Colmenas activas
-    const colmenasActivas = await prisma.colmena.count({
-      where: {
-        usuarioId: userId,
-        estado: 'activa'
-      }
-    });
+    const [{ n: colmenasActivas }] = await sql`SELECT count(*)::int AS n FROM colmenas WHERE "usuarioId" = ${userId} AND estado = 'activa'`;
 
     const promedioPorColmena = colmenasActivas > 0 ? totalProduccion / colmenasActivas : 0;
 
     // Mejor mes
-    const mejorMesResult = await prisma.$queryRaw`
+    const mejorMesResult = await sql`
       SELECT EXTRACT(MONTH FROM "fecha") as mes, SUM("cantidad") as total
       FROM producciones
       WHERE "usuarioId" = ${userId} AND "tipoProducto" = 'miel' AND EXTRACT(YEAR FROM "fecha") = ${year}
@@ -81,7 +67,7 @@ reportesRoutes.get('/produccion-mensual', async (context: any) => {
       throw new Error('Año inválido');
     }
 
-    const monthlyData = await prisma.$queryRaw`
+    const monthlyData = await sql`
       SELECT
         EXTRACT(MONTH FROM p."fecha") as mes,
         COALESCE(SUM(p."cantidad"), 0) as kg,
@@ -127,7 +113,7 @@ reportesRoutes.get('/produccion-apiarios', async (context: any) => {
       throw new Error('Año inválido');
     }
 
-    const apiariosData = await prisma.$queryRaw`
+    const apiariosData = await sql`
       SELECT
         a."nombre" as apiario,
         COALESCE(SUM(p."cantidad"), 0) as kg,
@@ -159,9 +145,7 @@ reportesRoutes.get('/estado-sanitario', async (context: any) => {
   try {
     const userId = context.user?.id;
 
-    const totalColmenas = await prisma.colmena.count({
-      where: { usuarioId: userId }
-    });
+    const [{ n: totalColmenas }] = await sql`SELECT count(*)::int AS n FROM colmenas WHERE "usuarioId" = ${userId}`;
 
     if (totalColmenas === 0) {
       return {
@@ -172,8 +156,8 @@ reportesRoutes.get('/estado-sanitario', async (context: any) => {
     }
 
     const [casosActivos, casosCriticos] = await Promise.all([
-      prisma.casoSanitario.count({ where: { usuarioId: userId, anuladoAt: null, estado: { in: ['abierto', 'en_seguimiento'] } } }),
-      prisma.casoSanitario.count({ where: { usuarioId: userId, anuladoAt: null, estado: { in: ['abierto', 'en_seguimiento'] }, gravedad: { in: ['alta', 'critica'] } } }),
+      sql`SELECT count(*)::int AS n FROM casos_sanitarios WHERE "usuarioId" = ${userId} AND "anuladoAt" IS NULL AND estado IN ('abierto', 'en_seguimiento')`.then((r) => r[0].n as number),
+      sql`SELECT count(*)::int AS n FROM casos_sanitarios WHERE "usuarioId" = ${userId} AND "anuladoAt" IS NULL AND estado IN ('abierto', 'en_seguimiento') AND gravedad IN ('alta', 'critica')`.then((r) => r[0].n as number),
     ]);
     const data = {
       saludables: Math.max(0, totalColmenas - casosActivos),
@@ -197,7 +181,7 @@ reportesRoutes.get('/tendencia-anual', async (context: any) => {
   try {
     const userId = context.user?.id;
 
-    const tendenciaData = await prisma.$queryRaw`
+    const tendenciaData = await sql`
       SELECT
         EXTRACT(YEAR FROM p."fecha") as year,
         COALESCE(SUM(p."cantidad"), 0) as produccion,

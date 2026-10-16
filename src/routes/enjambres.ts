@@ -1,7 +1,7 @@
 import { Elysia } from 'elysia';
 import { authGuard } from '../middleware/auth';
 import { ApiResponse, Enjambre } from '../types/apicola';
-import prisma from '../prisma/client';
+import { sql, insert, updateWhere } from '../db';
 import { AlertService } from '../services/alertService';
 
 const enjambresRoutes = new Elysia({ prefix: '/enjambres' })
@@ -11,9 +11,10 @@ const enjambresRoutes = new Elysia({ prefix: '/enjambres' })
 enjambresRoutes.get('/', async (context: any) => {
   try {
     const userId = context.user?.id;
-    const enjambres = await prisma.enjambre.findMany({
-      where: { colmena: { usuarioId: userId } }
-    });
+    const enjambres = await sql`
+      SELECT e.* FROM enjambres e
+      JOIN colmenas c ON c.id = e."colmenaId"
+      WHERE c."usuarioId" = ${userId}`;
 
     return {
       success: true,
@@ -32,23 +33,19 @@ enjambresRoutes.post('/', async (context: any) => {
     const userId = context.user?.id;
     const enjambreData = context.body;
 
-    const colmena = await prisma.colmena.findFirst({
-      where: { id: enjambreData.colmenaId, usuarioId: userId },
-      select: { id: true }
-    });
+    const [colmena] = await sql`
+      SELECT id FROM colmenas WHERE id = ${enjambreData.colmenaId} AND "usuarioId" = ${userId} LIMIT 1`;
 
     if (!colmena) {
       context.set.status = 404;
       return { success: false, error: 'Colmena no encontrada' } as ApiResponse;
     }
 
-    const newEnjambre = await prisma.enjambre.create({
-      data: {
-        nombre: enjambreData.nombre,
-        estado: 'activo',
-        notas: enjambreData.notas || null,
-        colmenaId: colmena.id
-      }
+    const newEnjambre = await insert('enjambres', {
+      nombre: enjambreData.nombre,
+      estado: 'activo',
+      notas: enjambreData.notas || null,
+      colmenaId: colmena.id
     });
 
     // Crear alertas recurrentes automáticamente
@@ -82,29 +79,19 @@ enjambresRoutes.put('/:id', async (context: any) => {
     const userId = context.user?.id;
     const enjambreData = context.body;
 
-    const updatedEnjambre = await prisma.enjambre.updateMany({
-      where: {
-        id: id,
-        colmena: { usuarioId: userId }
-      },
-      data: {
-        nombre: enjambreData.nombre,
-        estado: enjambreData.estado,
-        notas: enjambreData.notas
-      }
-    });
+    const updated = await updateWhere(
+      'enjambres',
+      { nombre: enjambreData.nombre, estado: enjambreData.estado, notas: enjambreData.notas },
+      sql`id = ${id} AND "colmenaId" IN (SELECT id FROM colmenas WHERE "usuarioId" = ${userId})`
+    );
 
-    if (updatedEnjambre.count === 0) {
+    if (updated.length === 0) {
       throw new Error('Enjambre no encontrado');
     }
 
-    const enjambre = await prisma.enjambre.findUnique({
-      where: { id: id }
-    });
-
     return {
       success: true,
-      data: enjambre,
+      data: updated[0],
       message: 'Enjambre actualizado exitosamente'
     } as unknown as ApiResponse<Enjambre>;
   } catch (error: any) {
@@ -119,20 +106,20 @@ enjambresRoutes.delete('/:id', async (context: any) => {
     const { id } = context.params;
     const userId = context.user?.id;
 
-    const updatedEnjambre = await prisma.enjambre.updateMany({
-      where: { id, colmena: { usuarioId: userId } },
-      data: { estado: 'inactivo', alertasRecurrentesActivadas: false }
-    });
+    const updated = await updateWhere(
+      'enjambres',
+      { estado: 'inactivo', alertasRecurrentesActivadas: false },
+      sql`id = ${id} AND "colmenaId" IN (SELECT id FROM colmenas WHERE "usuarioId" = ${userId})`
+    );
 
-    if (updatedEnjambre.count === 0) {
+    if (updated.length === 0) {
       context.set.status = 404;
       return { success: false, error: 'Enjambre no encontrado' } as ApiResponse;
     }
 
-    const enjambre = await prisma.enjambre.findUnique({ where: { id } });
     return {
       success: true,
-      data: enjambre,
+      data: updated[0],
       message: 'Enjambre dado de baja; su trazabilidad se conserva'
     } as unknown as ApiResponse<Enjambre>;
   } catch (error: any) {

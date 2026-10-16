@@ -1,6 +1,4 @@
-import { PrismaClient } from '../src/generated/prisma/client';
-
-const prisma = new PrismaClient();
+import { sql, insert, upsert } from '../src/db';
 
 async function seed() {
   console.log('🌱 Ejecutando seed...');
@@ -19,43 +17,47 @@ async function seed() {
   ] as const;
 
   for (const [codigo, nombre, agente, declaracionObligatoria] of patologias) {
-    await prisma.patologiaSanitaria.upsert({
-      where: { codigo },
-      create: { codigo, nombre, agente, declaracionObligatoria },
-      update: { nombre, agente, declaracionObligatoria, activa: true },
-    });
+    await upsert(
+      'patologias_sanitarias',
+      ['codigo'],
+      { codigo, nombre, agente, declaracionObligatoria },
+      { nombre, agente, declaracionObligatoria, activa: true },
+    );
   }
   console.log('✅ Catálogo sanitario actualizado');
 
-  const adminEmail = process.env.ADMIN_EMAIL || 'admin@apicolmena.com';
-  const adminPassword = process.env.ADMIN_PASSWORD || 'Admin123!';
+  // En producción el administrador solo se crea si defines su contraseña (nunca con la de ejemplo)
+  if (process.env.NODE_ENV === 'production' && !(process.env.SUPER_ADMIN_PASSWORD || process.env.ADMIN_PASSWORD)) {
+    console.log('ℹ️  SUPER_ADMIN_PASSWORD no definida: se omite la creación del administrador');
+    await sql.close();
+    return;
+  }
+
+  const adminEmail = (process.env.SUPER_ADMIN_EMAIL || process.env.ADMIN_EMAIL || 'admin@apicolmena.com').trim();
+  const adminPassword = (process.env.SUPER_ADMIN_PASSWORD || process.env.ADMIN_PASSWORD || 'Admin123!').trim();
   const adminName = process.env.ADMIN_NAME || 'Administrador';
 
   // Verificar si ya existe un administrador
-  const existingAdmin = await prisma.usuario.findFirst({
-    where: { rol: 'administrador' }
-  });
+  const [existingAdmin] = await sql`SELECT email FROM usuarios WHERE rol = 'administrador' LIMIT 1`;
 
   if (existingAdmin) {
     console.log('✅ Ya existe un administrador en el sistema');
     console.log(`   Email: ${existingAdmin.email}`);
-    await prisma.$disconnect();
+    await sql.close();
     return;
   }
 
   // Crear el primer administrador
   const hashedPassword = await Bun.password.hash(adminPassword);
 
-  const admin = await prisma.usuario.create({
-    data: {
-      nombre: adminName,
-      email: adminEmail,
-      password: hashedPassword,
-      rol: 'administrador',
-      activo: true,
-      moneda: 'COP',
-      colmenasAsignadas: []
-    }
+  const admin = await insert('usuarios', {
+    nombre: adminName,
+    email: adminEmail,
+    password: hashedPassword,
+    rol: 'administrador',
+    activo: true,
+    moneda: 'COP',
+    colmenasAsignadas: [],
   });
 
   console.log('✅ Administrador creado exitosamente');
@@ -65,7 +67,7 @@ async function seed() {
   console.log('');
   console.log('⚠️  Cambia la contraseña por defecto después del primer login');
 
-  await prisma.$disconnect();
+  await sql.close();
 }
 
 seed().catch((error) => {

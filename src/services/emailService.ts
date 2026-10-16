@@ -1,7 +1,8 @@
 import { Resend } from 'resend';
 import logger from '../utils/logger';
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+// Sin RESEND_API_KEY la API arranca igual; solo se omite el envío de correos
+const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
 
 export interface EmailOptions {
   to: string;
@@ -24,6 +25,10 @@ export class EmailService {
   }
 
   async sendEmail(options: EmailOptions): Promise<boolean> {
+    if (!resend) {
+      logger.warn('RESEND_API_KEY no configurada: correo no enviado');
+      return false;
+    }
     try {
       const emailOptions: any = {
         from: options.from || 'noreply@tuprofedeia.com.co',

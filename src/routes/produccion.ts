@@ -1,8 +1,19 @@
 import { Elysia, t } from 'elysia';
 import { authenticateToken } from '../middleware/auth';
 import { ApiResponse, Produccion } from '../types/apicola';
-import prisma from '../prisma/client';
-import { TipoProducto } from '../generated/prisma/enums';
+import { sql, insert, updateById, idList, type Row } from '../db';
+
+// Equivalente a include: { colmena: {id, nombre}, apiario: {id, nombre} }
+async function withNames(producciones: Row[]): Promise<Row[]> {
+  if (!producciones.length) return [];
+  const [colmenas, apiarios] = await Promise.all([
+    sql`SELECT id, nombre FROM colmenas WHERE id = ANY(${sql.array([...new Set(idList(producciones, 'colmenaId'))], 'TEXT')})`,
+    sql`SELECT id, nombre FROM apiarios WHERE id = ANY(${sql.array([...new Set(idList(producciones, 'apiarioId'))], 'TEXT')})`,
+  ]);
+  const colmenaById = new Map(colmenas.map((c: Row) => [c.id, c]));
+  const apiarioById = new Map(apiarios.map((a: Row) => [a.id, a]));
+  return producciones.map((p) => ({ ...p, colmena: colmenaById.get(p.colmenaId) ?? null, apiario: apiarioById.get(p.apiarioId) ?? null }));
+}
 import { z } from 'zod';
 
 // Esquemas de validación con Zod
@@ -53,47 +64,18 @@ produccionRoutes.get('/', async ({ headers, query }) => {
 
     const { page = 1, limit = 50, colmenaId, apiarioId, tipoProducto, fechaDesde, fechaHasta } = validatedQuery.data;
 
-    const where: any = { usuarioId: userId };
+    const filters = sql`"usuarioId" = ${userId}
+      ${colmenaId ? sql`AND "colmenaId" = ${colmenaId}` : sql``}
+      ${apiarioId ? sql`AND "apiarioId" = ${apiarioId}` : sql``}
+      ${tipoProducto ? sql`AND "tipoProducto" = ${tipoProducto}` : sql``}
+      ${fechaDesde ? sql`AND fecha >= ${new Date(fechaDesde)}` : sql``}
+      ${fechaHasta ? sql`AND fecha <= ${new Date(fechaHasta)}` : sql``}`;
 
-    if (colmenaId) {
-      where.colmenaId = colmenaId;
-    }
-
-    if (apiarioId) {
-      where.apiarioId = apiarioId;
-    }
-
-    if (tipoProducto) {
-      where.tipoProducto = tipoProducto as TipoProducto;
-    }
-
-    if (fechaDesde || fechaHasta) {
-      where.fecha = {};
-      if (fechaDesde) {
-        where.fecha.gte = new Date(fechaDesde);
-      }
-      if (fechaHasta) {
-        where.fecha.lte = new Date(fechaHasta);
-      }
-    }
-
-    const [producciones, total] = await Promise.all([
-      prisma.produccion.findMany({
-        where,
-        include: {
-          colmena: {
-            select: { id: true, nombre: true }
-          },
-          apiario: {
-            select: { id: true, nombre: true }
-          }
-        },
-        orderBy: { fecha: 'desc' },
-        skip: (page - 1) * limit,
-        take: limit,
-      }),
-      prisma.produccion.count({ where })
+    const [rows, [{ n: total }]] = await Promise.all([
+      sql`SELECT * FROM producciones WHERE ${filters} ORDER BY fecha DESC LIMIT ${limit} OFFSET ${(page - 1) * limit}`,
+      sql`SELECT count(*)::int AS n FROM producciones WHERE ${filters}`,
     ]);
+    const producciones = await withNames(rows);
 
     return {
       success: true,
@@ -105,7 +87,7 @@ produccionRoutes.get('/', async ({ headers, query }) => {
         totalPages: Math.ceil(total / limit)
       },
       message: 'Producciones obtenidas exitosamente'
-    } as ApiResponse<Produccion[]>;
+    } as unknown as ApiResponse<Produccion[]>;
   } catch (error: any) {
     console.error('Get producciones error:', error);
     return {
@@ -122,20 +104,7 @@ produccionRoutes.get('/:id', async ({ params, headers }) => {
     const userId = user?.id;
     const { id } = params;
 
-    const produccion = await prisma.produccion.findFirst({
-      where: {
-        id,
-        usuarioId: userId
-      },
-      include: {
-        colmena: {
-          select: { id: true, nombre: true }
-        },
-        apiario: {
-          select: { id: true, nombre: true }
-        }
-      }
-    });
+    const [produccion] = await withNames(await sql`SELECT * FROM producciones WHERE id = ${id} AND "usuarioId" = ${userId} LIMIT 1`);
 
     if (!produccion) {
       return {
@@ -148,7 +117,7 @@ produccionRoutes.get('/:id', async ({ params, headers }) => {
       success: true,
       data: produccion,
       message: 'Producción obtenida exitosamente'
-    } as ApiResponse<Produccion>;
+    } as unknown as ApiResponse<Produccion>;
   } catch (error: any) {
     console.error('Get produccion error:', error);
     return {
@@ -177,12 +146,7 @@ produccionRoutes.post('/', async ({ body, headers }) => {
     const produccionData = validatedBody.data;
 
     // Verificar que la colmena y apiario pertenecen al usuario
-    const colmena = await prisma.colmena.findFirst({
-      where: {
-        id: produccionData.colmenaId,
-        usuarioId: userId
-      }
-    });
+    const [colmena] = await sql`SELECT * FROM colmenas WHERE id = ${produccionData.colmenaId} AND "usuarioId" = ${userId} LIMIT 1`;
 
     if (!colmena) {
       return {
@@ -191,12 +155,7 @@ produccionRoutes.post('/', async ({ body, headers }) => {
       } as ApiResponse;
     }
 
-    const apiario = await prisma.apiario.findFirst({
-      where: {
-        id: produccionData.apiarioId,
-        usuarioId: userId
-      }
-    });
+    const [apiario] = await sql`SELECT * FROM apiarios WHERE id = ${produccionData.apiarioId} AND "usuarioId" = ${userId} LIMIT 1`;
 
     if (!apiario) {
       return {
@@ -205,43 +164,31 @@ produccionRoutes.post('/', async ({ body, headers }) => {
       } as ApiResponse;
     }
 
-    const nuevaProduccion = await prisma.produccion.create({
-      data: {
-        fecha: new Date(produccionData.fecha),
-        tipoProducto: produccionData.tipoProducto,
-        cantidad: produccionData.cantidad,
-        unidad: produccionData.unidad,
-        calidad: produccionData.calidad,
-        lote: produccionData.lote,
-        destino: produccionData.destino,
-        observaciones: produccionData.observaciones,
-        usuarioId: userId,
-        colmenaId: produccionData.colmenaId,
-        apiarioId: produccionData.apiarioId
-      },
-      include: {
-        colmena: {
-          select: { id: true, nombre: true }
-        },
-        apiario: {
-          select: { id: true, nombre: true }
-        }
-      }
-    });
+    const [nuevaProduccion] = await withNames([await insert('producciones', {
+      fecha: new Date(produccionData.fecha),
+      tipoProducto: produccionData.tipoProducto,
+      cantidad: produccionData.cantidad,
+      unidad: produccionData.unidad,
+      calidad: produccionData.calidad,
+      lote: produccionData.lote,
+      destino: produccionData.destino,
+      observaciones: produccionData.observaciones,
+      usuarioId: userId,
+      colmenaId: produccionData.colmenaId,
+      apiarioId: produccionData.apiarioId
+    })]);
 
     // Registrar actividad de producción
     try {
-      await prisma.actividad.create({
-        data: {
-          tipo: 'produccion',
-          titulo: 'Cosecha registrada',
-          descripcion: `Cosecha registrada: ${produccionData.cantidad} ${produccionData.unidad} de ${produccionData.tipoProducto}`,
-          entidadTipo: 'colmena',
-          entidadId: produccionData.colmenaId,
-          entidadNombre: colmena.nombre,
-          estado: 'success',
-          usuarioId: userId
-        }
+      await insert('actividades', {
+        tipo: 'produccion',
+        titulo: 'Cosecha registrada',
+        descripcion: `Cosecha registrada: ${produccionData.cantidad} ${produccionData.unidad} de ${produccionData.tipoProducto}`,
+        entidadTipo: 'colmena',
+        entidadId: produccionData.colmenaId,
+        entidadNombre: colmena.nombre,
+        estado: 'success',
+        usuarioId: userId
       });
     } catch (activityError) {
       console.error('Error registrando actividad de producción:', activityError);
@@ -251,7 +198,7 @@ produccionRoutes.post('/', async ({ body, headers }) => {
       success: true,
       data: nuevaProduccion,
       message: 'Producción creada exitosamente'
-    } as ApiResponse<Produccion>;
+    } as unknown as ApiResponse<Produccion>;
   } catch (error: any) {
     console.error('Create produccion error:', error);
     return {
@@ -281,12 +228,7 @@ produccionRoutes.put('/:id', async ({ params, body, headers }) => {
     const produccionData = validatedBody.data;
 
     // Verificar que la producción existe y pertenece al usuario
-    const produccionExistente = await prisma.produccion.findFirst({
-      where: {
-        id,
-        usuarioId: userId
-      }
-    });
+    const [produccionExistente] = await sql`SELECT id FROM producciones WHERE id = ${id} AND "usuarioId" = ${userId} LIMIT 1`;
 
     if (!produccionExistente) {
       return {
@@ -297,12 +239,7 @@ produccionRoutes.put('/:id', async ({ params, body, headers }) => {
 
     // Si se están cambiando colmena o apiario, verificar permisos
     if (produccionData.colmenaId) {
-      const colmena = await prisma.colmena.findFirst({
-        where: {
-          id: produccionData.colmenaId,
-          usuarioId: userId
-        }
-      });
+      const [colmena] = await sql`SELECT id FROM colmenas WHERE id = ${produccionData.colmenaId} AND "usuarioId" = ${userId} LIMIT 1`;
       if (!colmena) {
         return {
           success: false,
@@ -312,12 +249,7 @@ produccionRoutes.put('/:id', async ({ params, body, headers }) => {
     }
 
     if (produccionData.apiarioId) {
-      const apiario = await prisma.apiario.findFirst({
-        where: {
-          id: produccionData.apiarioId,
-          usuarioId: userId
-        }
-      });
+      const [apiario] = await sql`SELECT id FROM apiarios WHERE id = ${produccionData.apiarioId} AND "usuarioId" = ${userId} LIMIT 1`;
       if (!apiario) {
         return {
           success: false,
@@ -326,35 +258,24 @@ produccionRoutes.put('/:id', async ({ params, body, headers }) => {
       }
     }
 
-    const produccionActualizada = await prisma.produccion.update({
-      where: { id },
-      data: {
-        fecha: produccionData.fecha ? new Date(produccionData.fecha) : undefined,
-        tipoProducto: produccionData.tipoProducto,
-        cantidad: produccionData.cantidad,
-        unidad: produccionData.unidad,
-        calidad: produccionData.calidad,
-        lote: produccionData.lote,
-        destino: produccionData.destino,
-        observaciones: produccionData.observaciones,
-        colmenaId: produccionData.colmenaId,
-        apiarioId: produccionData.apiarioId
-      },
-      include: {
-        colmena: {
-          select: { id: true, nombre: true }
-        },
-        apiario: {
-          select: { id: true, nombre: true }
-        }
-      }
-    });
+    const [produccionActualizada] = await withNames([(await updateById('producciones', id, {
+      fecha: produccionData.fecha ? new Date(produccionData.fecha) : undefined,
+      tipoProducto: produccionData.tipoProducto,
+      cantidad: produccionData.cantidad,
+      unidad: produccionData.unidad,
+      calidad: produccionData.calidad,
+      lote: produccionData.lote,
+      destino: produccionData.destino,
+      observaciones: produccionData.observaciones,
+      colmenaId: produccionData.colmenaId,
+      apiarioId: produccionData.apiarioId
+    }))!]);
 
     return {
       success: true,
       data: produccionActualizada,
       message: 'Producción actualizada exitosamente'
-    } as ApiResponse<Produccion>;
+    } as unknown as ApiResponse<Produccion>;
   } catch (error: any) {
     console.error('Update produccion error:', error);
     return {
@@ -372,12 +293,7 @@ produccionRoutes.delete('/:id', async ({ params, headers }) => {
     const { id } = params;
 
     // Verificar que la producción existe y pertenece al usuario
-    const produccionExistente = await prisma.produccion.findFirst({
-      where: {
-        id,
-        usuarioId: userId
-      }
-    });
+    const [produccionExistente] = await sql`SELECT id FROM producciones WHERE id = ${id} AND "usuarioId" = ${userId} LIMIT 1`;
 
     if (!produccionExistente) {
       return {
@@ -386,9 +302,7 @@ produccionRoutes.delete('/:id', async ({ params, headers }) => {
       } as ApiResponse;
     }
 
-    const produccionEliminada = await prisma.produccion.delete({
-      where: { id }
-    });
+    await sql`DELETE FROM producciones WHERE id = ${id}`;
 
     return {
       success: true,

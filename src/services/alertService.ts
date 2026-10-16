@@ -1,5 +1,6 @@
-import prisma from '../prisma/client';
-import { TipoAlerta, PrioridadAlerta } from '../generated/prisma/enums';
+import { sql, insert, updateById } from '../db';
+import { getAlertPagination } from './alertPagination';
+import { TipoAlerta, PrioridadAlerta } from '../db/enums';
 import { emailService } from './emailService';
 import { AlertEmailTemplate } from '../templates/email/alertTemplate';
 
@@ -28,14 +29,12 @@ export class AlertService {
    */
   static async createAlert(alertData: CreateAlertData) {
     try {
-      const alerta = await prisma.alerta.create({
-        data: {
-          titulo: alertData.titulo,
-          mensaje: alertData.mensaje,
-          tipo: alertData.tipo,
-          prioridad: alertData.prioridad,
-          usuarioId: alertData.usuarioId,
-        },
+      const alerta = await insert('alertas', {
+        titulo: alertData.titulo,
+        mensaje: alertData.mensaje,
+        tipo: alertData.tipo,
+        prioridad: alertData.prioridad,
+        usuarioId: alertData.usuarioId,
       });
 
       // Enviar email para alertas críticas
@@ -45,17 +44,15 @@ export class AlertService {
 
       // Registrar actividad de alerta
       try {
-        await prisma.actividad.create({
-          data: {
-            tipo: 'alerta',
-            titulo: alertData.titulo,
-            descripcion: alertData.mensaje,
-            entidadTipo: 'alerta',
-            entidadId: alerta.id,
-            entidadNombre: 'Sistema de Alertas',
-            estado: alertData.prioridad === 'critica' || alertData.prioridad === 'alta' ? 'warning' : 'success',
-            usuarioId: alertData.usuarioId
-          }
+        await insert('actividades', {
+          tipo: 'alerta',
+          titulo: alertData.titulo,
+          descripcion: alertData.mensaje,
+          entidadTipo: 'alerta',
+          entidadId: alerta.id,
+          entidadNombre: 'Sistema de Alertas',
+          estado: alertData.prioridad === 'critica' || alertData.prioridad === 'alta' ? 'warning' : 'success',
+          usuarioId: alertData.usuarioId
         });
       } catch (activityError) {
         console.error('Error registrando actividad de alerta:', activityError);
@@ -189,11 +186,7 @@ export class AlertService {
    */
   static async getUserAlerts(usuarioId: string, limit: number = 50) {
     try {
-      const alerts = await prisma.alerta.findMany({
-        where: { usuarioId },
-        orderBy: { fechaCreacion: 'desc' },
-        take: limit,
-      });
+      const alerts = await sql`SELECT * FROM alertas WHERE "usuarioId" = ${usuarioId} ORDER BY "fechaCreacion" DESC LIMIT ${limit}`;
 
       return alerts;
     } catch (error) {
@@ -202,20 +195,21 @@ export class AlertService {
     }
   }
 
+  static async getUserAlertsPage(usuarioId: string, limit: number, requestedPage: number, unreadOnly: boolean) {
+    const [counts] = await sql`SELECT count(*)::int AS total, count(*) FILTER (WHERE leida = false)::int AS unread FROM alertas WHERE "usuarioId" = ${usuarioId}`;
+    const pagination = getAlertPagination(unreadOnly ? counts.unread : counts.total, counts.unread, limit, requestedPage);
+    const alerts = await sql`SELECT * FROM alertas WHERE "usuarioId" = ${usuarioId} AND (${!unreadOnly} OR leida = false) ORDER BY "fechaCreacion" DESC, id DESC LIMIT ${limit} OFFSET ${(pagination.page-1)*limit}`;
+    return { alerts, pagination };
+  }
+
   /**
    * Marca una alerta como leída
    */
   static async markAsRead(alertId: string, usuarioId: string) {
     try {
-      const updatedAlert = await prisma.alerta.updateMany({
-        where: {
-          id: alertId,
-          usuarioId,
-        },
-        data: { leida: true },
-      });
+      const updatedAlert = await sql`UPDATE alertas SET leida = true, "fechaActualizacion" = ${new Date()} WHERE id = ${alertId} AND "usuarioId" = ${usuarioId} RETURNING id`;
 
-      if (updatedAlert.count === 0) {
+      if (updatedAlert.length === 0) {
         throw new Error('Alerta no encontrada');
       }
 
@@ -234,20 +228,18 @@ export class AlertService {
       const proximaEjecucion = new Date();
       proximaEjecucion.setDate(proximaEjecucion.getDate() + alertData.frecuenciaDias);
 
-      const alerta = await prisma.alerta.create({
-        data: {
-          titulo: alertData.titulo,
-          mensaje: alertData.mensaje,
-          tipo: alertData.tipo,
-          prioridad: alertData.prioridad,
-          usuarioId: alertData.usuarioId,
-          esRecurrente: true,
-          frecuenciaDias: alertData.frecuenciaDias,
-          entidadTipo: alertData.entidadTipo,
-          entidadId: alertData.entidadId,
-          proximaEjecucion,
-          activa: true,
-        },
+      const alerta = await insert('alertas', {
+        titulo: alertData.titulo,
+        mensaje: alertData.mensaje,
+        tipo: alertData.tipo,
+        prioridad: alertData.prioridad,
+        usuarioId: alertData.usuarioId,
+        esRecurrente: true,
+        frecuenciaDias: alertData.frecuenciaDias,
+        entidadTipo: alertData.entidadTipo,
+        entidadId: alertData.entidadId,
+        proximaEjecucion,
+        activa: true,
       });
 
       return alerta;
@@ -265,15 +257,7 @@ export class AlertService {
       const now = new Date();
 
       // Buscar alertas recurrentes activas que han vencido
-      const alertasVencidas = await prisma.alerta.findMany({
-        where: {
-          esRecurrente: true,
-          activa: true,
-          proximaEjecucion: {
-            lte: now,
-          },
-        },
-      });
+      const alertasVencidas = await sql`SELECT * FROM alertas WHERE "esRecurrente" = true AND activa = true AND "proximaEjecucion" <= ${now}`;
 
       const alertasGeneradas = [];
 
@@ -287,23 +271,18 @@ export class AlertService {
 
           if (!entidadActiva) {
             // Desactivar alerta si la entidad ya no existe o no está activa
-            await prisma.alerta.update({
-              where: { id: alertaBase.id },
-              data: { activa: false },
-            });
+            await updateById('alertas', alertaBase.id, { activa: false });
             continue;
           }
 
           // Crear nueva alerta basada en la recurrente
-          const nuevaAlerta = await prisma.alerta.create({
-            data: {
-              titulo: alertaBase.titulo,
-              mensaje: alertaBase.mensaje,
-              tipo: alertaBase.tipo,
-              prioridad: alertaBase.prioridad,
-              usuarioId: alertaBase.usuarioId,
-              esRecurrente: false, // Esta es la alerta generada, no la base recurrente
-            },
+          const nuevaAlerta = await insert('alertas', {
+            titulo: alertaBase.titulo,
+            mensaje: alertaBase.mensaje,
+            tipo: alertaBase.tipo,
+            prioridad: alertaBase.prioridad,
+            usuarioId: alertaBase.usuarioId,
+            esRecurrente: false, // Esta es la alerta generada, no la base recurrente
           });
 
           // Actualizar la alerta recurrente con nueva fecha de próxima ejecución
@@ -312,12 +291,9 @@ export class AlertService {
             nuevaProximaEjecucion.getDate() + alertaBase.frecuenciaDias!
           );
 
-          await prisma.alerta.update({
-            where: { id: alertaBase.id },
-            data: {
-              ultimaEjecucion: now,
-              proximaEjecucion: nuevaProximaEjecucion,
-            },
+          await updateById('alertas', alertaBase.id, {
+            ultimaEjecucion: now,
+            proximaEjecucion: nuevaProximaEjecucion,
           });
 
           // Actualizar última alerta en la entidad
@@ -353,24 +329,15 @@ export class AlertService {
     try {
       switch (entidadTipo) {
         case 'colmena':
-          const colmena = await prisma.colmena.findUnique({
-            where: { id: entidadId },
-            select: { estado: true, alertasRecurrentesActivadas: true },
-          });
+          const [colmena] = await sql`SELECT estado, "alertasRecurrentesActivadas" FROM colmenas WHERE id = ${entidadId}`;
           return colmena?.estado === 'activa' && colmena?.alertasRecurrentesActivadas === true;
 
         case 'enjambre':
-          const enjambre = await prisma.enjambre.findUnique({
-            where: { id: entidadId },
-            select: { estado: true, alertasRecurrentesActivadas: true },
-          });
+          const [enjambre] = await sql`SELECT estado, "alertasRecurrentesActivadas" FROM enjambres WHERE id = ${entidadId}`;
           return enjambre?.estado === 'activo' && enjambre?.alertasRecurrentesActivadas === true;
 
         case 'nucleo':
-          const nucleo = await prisma.nucleo.findUnique({
-            where: { id: entidadId },
-            select: { estado: true, alertasRecurrentesActivadas: true },
-          });
+          const [nucleo] = await sql`SELECT estado, "alertasRecurrentesActivadas" FROM nucleos WHERE id = ${entidadId}`;
           return nucleo?.estado === 'en_formacion' || nucleo?.estado === 'en_desarrollo' || nucleo?.estado === 'listo';
 
         default:
@@ -393,24 +360,15 @@ export class AlertService {
     try {
       switch (entidadTipo) {
         case 'colmena':
-          await prisma.colmena.update({
-            where: { id: entidadId },
-            data: { ultimaAlertaControl: fecha },
-          });
+          await updateById('colmenas', entidadId, { ultimaAlertaControl: fecha });
           break;
 
         case 'enjambre':
-          await prisma.enjambre.update({
-            where: { id: entidadId },
-            data: { ultimaAlertaControl: fecha },
-          });
+          await updateById('enjambres', entidadId, { ultimaAlertaControl: fecha });
           break;
 
         case 'nucleo':
-          await prisma.nucleo.update({
-            where: { id: entidadId },
-            data: { ultimaAlertaControl: fecha },
-          });
+          await updateById('nucleos', entidadId, { ultimaAlertaControl: fecha });
           break;
       }
     } catch (error) {
@@ -427,22 +385,10 @@ export class AlertService {
       const alertasGeneradas = [];
 
       // Buscar colmenas con fechaReyna no nula y estado activa
-      const colmenasConReyna = await prisma.colmena.findMany({
-        where: {
-          fechaReyna: {
-            not: null,
-          },
-          estado: 'activa',
-        },
-        include: {
-          usuario: {
-            select: { id: true, nombre: true },
-          },
-          apiario: {
-            select: { nombre: true },
-          },
-        },
-      });
+      const colmenasConReyna = (await sql`
+        SELECT c.*, a.nombre AS "apiarioNombre" FROM colmenas c JOIN apiarios a ON a.id = c."apiarioId"
+        WHERE c."fechaReyna" IS NOT NULL AND c.estado = 'activa'`
+      ).map(({ apiarioNombre, ...c }: any) => ({ ...c, apiario: { nombre: apiarioNombre } }));
 
       for (const colmena of colmenasConReyna) {
         if (!colmena.fechaReyna) continue;
@@ -466,18 +412,10 @@ export class AlertService {
         fechaAlertaCincoAnios.setMonth(fechaAlertaCincoAnios.getMonth() + 57);
 
         // Verificar si ya existe alerta para esta colmena y fecha crítica
-        const alertaExistenteDosAnios = await prisma.alerta.findFirst({
-          where: {
-            entidadTipo: 'colmena',
-            entidadId: colmena.id,
-            titulo: {
-              contains: 'reemplazo de reina',
-            },
-            fechaCreacion: {
-              gte: new Date(now.getTime() - 24 * 60 * 60 * 1000), // Últimas 24 horas
-            },
-          },
-        });
+        const [alertaExistenteDosAnios] = await sql`
+          SELECT id FROM alertas
+          WHERE "entidadTipo" = 'colmena' AND "entidadId" = ${colmena.id} AND titulo LIKE '%reemplazo de reina%'
+            AND "fechaCreacion" >= ${new Date(now.getTime() - 24 * 60 * 60 * 1000)} LIMIT 1`; // Últimas 24 horas
 
         // Crear alerta fija para reemplazo a los 2 años si no existe y estamos en la fecha crítica
         if (!alertaExistenteDosAnios && now >= fechaAlertaDosAnios && now < fechaDosAnios) {
@@ -492,18 +430,10 @@ export class AlertService {
         }
 
         // Crear alerta fija para reemplazo a los 5 años si no existe y estamos en la fecha crítica
-        const alertaExistenteCincoAnios = await prisma.alerta.findFirst({
-          where: {
-            entidadTipo: 'colmena',
-            entidadId: colmena.id,
-            titulo: {
-              contains: 'reina de 5 años',
-            },
-            fechaCreacion: {
-              gte: new Date(now.getTime() - 24 * 60 * 60 * 1000), // Últimas 24 horas
-            },
-          },
-        });
+        const [alertaExistenteCincoAnios] = await sql`
+          SELECT id FROM alertas
+          WHERE "entidadTipo" = 'colmena' AND "entidadId" = ${colmena.id} AND titulo LIKE '%reina de 5 años%'
+            AND "fechaCreacion" >= ${new Date(now.getTime() - 24 * 60 * 60 * 1000)} LIMIT 1`; // Últimas 24 horas
 
         if (!alertaExistenteCincoAnios && now >= fechaAlertaCincoAnios && now < fechaCincoAnios) {
           const alertaCincoAnios = await this.createAlert({
@@ -521,17 +451,10 @@ export class AlertService {
 
         if (mesesHastaDosAnios <= 1 && mesesHastaDosAnios >= 0) {
           // Verificar si ya existe alerta recurrente para esta colmena
-          const alertaRecurrenteExistente = await prisma.alerta.findFirst({
-            where: {
-              entidadTipo: 'colmena',
-              entidadId: colmena.id,
-              esRecurrente: true,
-              titulo: {
-                contains: 'recordatorio mensual',
-              },
-              activa: true,
-            },
-          });
+          const [alertaRecurrenteExistente] = await sql`
+            SELECT id FROM alertas
+            WHERE "entidadTipo" = 'colmena' AND "entidadId" = ${colmena.id} AND "esRecurrente" = true
+              AND titulo LIKE '%recordatorio mensual%' AND activa = true LIMIT 1`;
 
           if (!alertaRecurrenteExistente) {
             const alertaRecurrente = await this.createRecurrentAlert({
@@ -562,10 +485,7 @@ export class AlertService {
   private static async sendAlertEmail(alerta: any, usuarioId: string) {
     try {
       // Obtener información del usuario
-      const usuario = await prisma.usuario.findUnique({
-        where: { id: usuarioId },
-        select: { email: true, nombre: true },
-      });
+      const [usuario] = await sql`SELECT email, nombre FROM usuarios WHERE id = ${usuarioId}`;
 
       if (!usuario?.email) {
         console.warn('Usuario sin email configurado, no se puede enviar alerta por email');

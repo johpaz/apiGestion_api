@@ -1,9 +1,22 @@
 import { Elysia } from 'elysia';
 import { authenticateToken } from '../middleware/auth';
+import { AuthenticationError, AuthorizationError, requireRole } from '../middleware/authorization';
 import { ApiResponse, RegistroFinanciero, Moneda } from '../types/apicola';
-import { Transaccion, Inspeccion, Usuario, Colmena, Enjambre, Nucleo, InsumoApicola, Produccion, Producto, Apiario, Actividad } from '../generated/prisma/client';
-import prisma from '../prisma/client';
+import { sql, type Row } from '../db';
 import { CurrencyService } from '../services/currencyService';
+
+// Filas de la base de datos
+type Transaccion = Row & { tipo: string; monto: number };
+type Inspeccion = Row & { estadoSanidad: string };
+type Usuario = Row & { activo: boolean; rol: string };
+type Colmena = Row & { estado: string };
+type Enjambre = Row & { estado: string };
+type Nucleo = Row & { estado: string; tipo: string };
+type InsumoApicola = Row & { categoria: string; cantidadActual: number; cantidadMinima: number };
+type Produccion = Row & { tipoProducto: string };
+type Producto = Row & { cantidad: number; fechaProduccion: Date | null };
+type Apiario = Row & { ciudad: string; pais: string };
+type Actividad = Row & { fechaCreacion: Date };
 
 const dashboardRoutes = new Elysia({ prefix: '/dashboard' });
 
@@ -11,22 +24,22 @@ const dashboardRoutes = new Elysia({ prefix: '/dashboard' });
 dashboardRoutes.get('/stats', async ({ headers }) => {
    try {
      console.log('🔍 DEBUG API: Solicitud a /dashboard/stats recibida');
-     const user = await authenticateToken({ headers });
+     const user = await requireRole(['apicultor'])(await authenticateToken({ headers }));
      const userId = user?.id;
      console.log('🔍 DEBUG API: User ID:', userId);
 
     // Get user's data from database including currency preference and role
     const [userData, colmenas, inspecciones, productos, producciones, transacciones, enjambres, nucleos, insumos, apiarios] = await Promise.all([
-      prisma.usuario.findUnique({ where: { id: userId }, select: { moneda: true, rol: true } }),
-      prisma.colmena.findMany({ where: { usuarioId: userId } }),
-      prisma.inspeccion.findMany({ where: { usuarioId: userId } }),
-      prisma.producto.findMany({ where: { usuarioId: userId } }),
-      prisma.produccion.findMany({ where: { usuarioId: userId } }),
-      prisma.transaccion.findMany({ where: { usuarioId: userId, anuladoAt: null } }),
-      prisma.enjambre.findMany({ where: { colmena: { usuarioId: userId } } }),
-      prisma.nucleo.findMany({ where: { apiario: { usuarioId: userId } } }),
-      prisma.insumoApicola.findMany({ where: { usuarioId: userId } }),
-      prisma.apiario.findMany({ where: { usuarioId: userId } })
+      sql`SELECT moneda, rol FROM usuarios WHERE id = ${userId}`.then((r: Row[]) => r[0] ?? null),
+      sql`SELECT * FROM colmenas WHERE "usuarioId" = ${userId}`,
+      sql`SELECT * FROM inspecciones WHERE "usuarioId" = ${userId}`,
+      sql`SELECT * FROM productos WHERE "usuarioId" = ${userId}`,
+      sql`SELECT * FROM producciones WHERE "usuarioId" = ${userId}`,
+      sql`SELECT * FROM transacciones WHERE "usuarioId" = ${userId} AND "anuladoAt" IS NULL`,
+      sql`SELECT e.* FROM enjambres e JOIN colmenas c ON c.id = e."colmenaId" WHERE c."usuarioId" = ${userId}`,
+      sql`SELECT n.* FROM nucleos n JOIN apiarios a ON a.id = n."apiarioId" WHERE a."usuarioId" = ${userId}`,
+      sql`SELECT * FROM insumos_apicola WHERE "usuarioId" = ${userId}`,
+      sql`SELECT * FROM apiarios WHERE "usuarioId" = ${userId}`
     ]);
 
     // Get user's currency preference and role (default to COP if not set)
@@ -86,7 +99,7 @@ dashboardRoutes.get('/stats', async ({ headers }) => {
       acc[i.categoria] = (acc[i.categoria] || 0) + 1;
       return acc;
     }, {} as Record<string, number>);
-    const insumosStockBajo = insumos.filter((i: InsumoApicola) => i.cantidadActual < i.cantidadMinima).length;
+    const insumosStockBajo = insumos.filter((i: InsumoApicola) => i.cantidadActual > 0 && i.cantidadActual < i.cantidadMinima).length;
     const insumosAgotados = insumos.filter((i: InsumoApicola) => i.cantidadActual <= 0).length;
     const insumosStockBueno = insumos.filter((i: InsumoApicola) => i.cantidadActual >= i.cantidadMinima).length;
 
@@ -135,7 +148,7 @@ dashboardRoutes.get('/stats', async ({ headers }) => {
     // Calculate users statistics (only for administrators)
     let usuariosStats: { total: number; activos: number; porRol: Record<string, number> } | null = null;
     if (userRole === 'administrador') {
-      const usuarios = await prisma.usuario.findMany();
+      const usuarios = await sql`SELECT id, activo, rol FROM usuarios`;
       const usuariosActivos = usuarios.filter((u: Usuario) => u.activo).length;
       const usuariosPorRol = usuarios.reduce((acc: Record<string, number>, u: Usuario) => {
         acc[u.rol] = (acc[u.rol] || 0) + 1;
@@ -147,6 +160,13 @@ dashboardRoutes.get('/stats', async ({ headers }) => {
         porRol: usuariosPorRol
       };
     }
+
+    const distribucionSanidad = inspecciones
+      .filter((inspection) => !inspection.anuladoAt)
+      .reduce((distribution: Record<string, number>, inspection) => {
+        distribution[inspection.estadoSanidad] = (distribution[inspection.estadoSanidad] || 0) + 1;
+        return distribution;
+      }, {});
 
     const stats = {
       colmenas: {
@@ -162,6 +182,7 @@ dashboardRoutes.get('/stats', async ({ headers }) => {
       },
       sanidad: {
         inspeccionesRealizadas: inspecciones.length,
+        distribucionSanidad,
         inspeccionesPendientes,
         colmenasConProblemas: inspeccionesConProblemas
       },
@@ -207,6 +228,7 @@ dashboardRoutes.get('/stats', async ({ headers }) => {
       message: 'Estadísticas del dashboard obtenidas exitosamente'
     } as ApiResponse;
   } catch (error: unknown) {
+      if (error instanceof AuthenticationError || error instanceof AuthorizationError) throw error;
     console.error('❌ ERROR API: Get dashboard stats error:', error);
     console.error('❌ ERROR API: Stack trace:', error instanceof Error ? error.stack : error);
     throw new Error('Error interno del servidor');
@@ -217,19 +239,12 @@ dashboardRoutes.get('/stats', async ({ headers }) => {
 dashboardRoutes.get('/activities', async ({ headers }) => {
     try {
       console.log('🔍 DEBUG API: Solicitud a /dashboard/activities recibida');
-      const user = await authenticateToken({ headers });
+      const user = await requireRole(['apicultor'])(await authenticateToken({ headers }));
       const userId = user?.id;
       console.log('🔍 DEBUG API: User ID:', userId);
 
       // Get recent activities from database
-      const activities = await prisma.actividad.findMany({
-        where: { usuarioId: userId },
-        orderBy: { fechaCreacion: 'desc' },
-        take: 10,
-        include: {
-          usuario: false // No need to include user data
-        }
-      });
+      const activities = await sql`SELECT * FROM actividades WHERE "usuarioId" = ${userId} ORDER BY "fechaCreacion" DESC LIMIT 10`;
 
       // Format activities for frontend
       const formattedActivities = activities.map((activity: Actividad) => ({
@@ -249,6 +264,7 @@ dashboardRoutes.get('/activities', async ({ headers }) => {
         message: 'Actividades recientes obtenidas exitosamente'
       } as ApiResponse;
     } catch (error: unknown) {
+      if (error instanceof AuthenticationError || error instanceof AuthorizationError) throw error;
       console.error('❌ ERROR API: Get recent activities error:', error);
       console.error('❌ ERROR API: Stack trace:', error instanceof Error ? error.stack : error);
       throw new Error('Error interno del servidor');
