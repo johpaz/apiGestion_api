@@ -16,7 +16,7 @@ import logger from '../utils/logger';
 import { ALL_TOOLS, runTool, type Audience, type ToolContext } from './tools';
 import { deleteStoredKey, loadStoredKey, saveStoredKey } from './keyStore';
 import { UI_TOOL, buildSurface, type A2uiMessage } from './a2ui';
-import { AI_MODEL, AI_PROVIDER, SKILLS, SWARMS, agentIdFor, coordinatorOf, personaIdFromAgentId, promptFor, userIdFromAgentId } from './swarm';
+import { AI_MODEL, AI_PROVIDER, SKILLS, SWARMS, agentIdFor, coordinatorOf, personaIdFromAgentId, personaName, promptFor, userIdFromAgentId } from './swarm';
 
 /**
  * Integración con Hive SDK.
@@ -343,7 +343,7 @@ export async function removeApiKey(user: AiUser) {
 // ─── Conversación ───────────────────────────────────────────────────────────
 
 export type ChatEvent =
-  | { type: 'step'; step: 'tool_call' | 'tool_result' | 'delegate'; name: string }
+  | { type: 'step'; step: 'tool_call' | 'tool_result' | 'delegate'; name: string; detail?: string }
   | { type: 'token'; content: string }
   | { type: 'a2ui'; messages: A2uiMessage[] }
   | { type: 'done'; response: string; usage?: { tokensEntrada: number; tokensSalida: number; herramientas: number } };
@@ -404,7 +404,15 @@ export async function* chat(user: AiUser, message: string, conversationId: strin
           if (typeof msg.content === 'string' && msg.content) last = msg.content;
           for (const tc of msg.tool_calls ?? []) {
             const name = tc.function?.name ?? 'herramienta';
-            push({ type: 'step', step: name === 'task_delegate' ? 'delegate' : 'tool_call', name });
+            let detail: string | undefined;
+            if (name === 'task_delegate') {
+              try {
+                const raw = tc.function?.arguments;
+                const args = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                detail = personaName(String(args?.worker_id ?? ''));
+              } catch { /* sin detalle */ }
+            }
+            push({ type: 'step', step: name === 'task_delegate' ? 'delegate' : 'tool_call', name, detail });
           }
         }
         for (const msg of chunk.tools?.messages ?? []) push({ type: 'step', step: 'tool_result', name: msg.name ?? 'herramienta' });

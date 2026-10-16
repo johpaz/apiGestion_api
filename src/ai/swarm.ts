@@ -293,3 +293,13 @@ export function promptFor(persona: Persona, rol: Audience, userId: string): stri
     persona.systemPrompt,
   );
 }
+
+/** Nombre legible de un agente (a partir de su id con usuario) para la narración del chat. */
+export function personaName(agentId: string): string | undefined {
+  const id = personaIdFromAgentId(agentId);
+  for (const list of Object.values(SWARMS)) {
+    const found = list.find((p) => p.id === id);
+    if (found) return found.name;
+  }
+  return undefined;
+}

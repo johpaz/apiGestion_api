@@ -13,6 +13,7 @@ import {
 } from '../ai/hive';
 import { AI_MODEL, AI_PROVIDER } from '../ai/swarm';
 import { toolsFor } from '../ai/tools';
+import { readTurn, startTurn } from '../ai/turns';
 import type { ApiResponse } from '../types/apicola';
 
 const chatSchema = z.object({
@@ -177,6 +178,30 @@ aiRoutes.post('/chat', async ({ user, body, request, set }: any) => {
       'X-Accel-Buffering': 'no',
     },
   });
+});
+
+// Turnos con eventos por polling (funciona detrás de cualquier proxy): POST inicia, GET consulta.
+aiRoutes.post('/turnos', async ({ user, body, set }: any) => {
+  const parsed = chatSchema.safeParse(body);
+  if (!parsed.success) {
+    set.status = 400;
+    return { success: false, error: parsed.error.issues[0]?.message ?? 'Datos de entrada inválidos' } as ApiResponse;
+  }
+  if (rateLimited(user.id)) {
+    set.status = 429;
+    return { success: false, error: 'Demasiados mensajes seguidos. Espera un momento', codigo: 'RATE_LIMITED' } as ApiResponse;
+  }
+  set.status = 202;
+  return { success: true, data: startTurn(asAiUser(user), parsed.data.mensaje, parsed.data.conversacionId) } as ApiResponse;
+});
+
+aiRoutes.get('/turnos/:id', ({ user, params, query, set }: any) => {
+  const result = readTurn(user.id, params.id, Number(query?.desde) || 0);
+  if (!result) {
+    set.status = 404;
+    return { success: false, error: 'Turno no encontrado o expirado' } as ApiResponse;
+  }
+  return { success: true, data: { eventos: result.events, siguiente: result.next, terminado: result.finished } } as ApiResponse;
 });
 
 export default aiRoutes;

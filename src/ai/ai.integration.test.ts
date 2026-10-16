@@ -277,6 +277,41 @@ describe('transporte real (TCP + CORS)', () => {
   });
 });
 
+describe('turnos con polling (narración en vivo)', () => {
+  const poll = async (as: string, id: string, from = 0) => (await call(`/ai/turnos/${id}?desde=${from}`, { as })).json();
+
+  test('inicia un turno, narra los pasos y entrega la respuesta con tarjeta A2UI', async () => {
+    await call('/ai/api-key', { as: APICULTOR, method: 'PUT', body: JSON.stringify({ apiKey: 'AIzaSyAPICULTOR-SECRETA-4321' }) });
+    const start = await call('/ai/turnos', { as: APICULTOR, method: 'POST', body: JSON.stringify({ mensaje: 'muestra una grafica' }) });
+    expect(start.status).toBe(202);
+    const { turnId } = (await start.json()).data;
+    const seen: any[] = [];
+    let from = 0;
+    for (let i = 0; i < 100; i++) {
+      const r = (await poll(APICULTOR, turnId, from)).data;
+      seen.push(...r.eventos);
+      from = r.siguiente;
+      if (r.terminado) break;
+      await Bun.sleep(20);
+    }
+    expect(seen.some((e) => e.type === 'step' && e.name === 'ui_mostrar')).toBe(true);
+    expect(seen.some((e) => e.type === 'a2ui')).toBe(true);
+    expect(seen.at(-1).type).toBe('done');
+  });
+
+  test('un turno es privado de su dueño', async () => {
+    const { turnId } = (await (await call('/ai/turnos', { as: APICULTOR, method: 'POST', body: JSON.stringify({ mensaje: 'hola' }) })).json()).data;
+    expect((await call(`/ai/turnos/${turnId}`, { as: OTRO_APICULTOR })).status).toBe(404);
+  });
+
+  test('sin API key el turno termina con un evento de error con código', async () => {
+    const { turnId } = (await (await call('/ai/turnos', { as: OTRO_APICULTOR, method: 'POST', body: JSON.stringify({ mensaje: 'hola' }) })).json()).data;
+    let r: any;
+    for (let i = 0; i < 100; i++) { r = (await poll(OTRO_APICULTOR, turnId)).data; if (r.terminado) break; await Bun.sleep(20); }
+    expect(r.eventos.at(-1)).toMatchObject({ type: 'error', codigo: 'NO_API_KEY' });
+  });
+});
+
 describe('MCP v2', () => {
   test('exige autenticación', async () => {
     const res = await rpc(undefined, 'tools/list');
