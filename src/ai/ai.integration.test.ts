@@ -14,7 +14,8 @@ import jwt from 'jsonwebtoken';
 
 process.env.HIVE_HOME = mkdtempSync(join(tmpdir(), 'hive-test-'));
 process.env.HIVE_DB_PATH = ':memory:';
-process.env.JWT_SECRET = 'test-secret';
+process.env.JWT_SECRET = 'test-secret-con-mas-de-32-caracteres-xx';
+process.env.AI_KEY_SECRET = 'clave-de-cifrado-de-prueba-0123456789';
 process.env.DATABASE_URL = 'postgres://test:test@127.0.0.1:1/test';
 process.env.LOG_LEVEL = 'error';
 delete process.env.GEMINI_API_KEY;
@@ -28,12 +29,24 @@ const USERS: Record<string, { rol: string }> = {
   [ADMIN]: { rol: 'administrador' },
 };
 
+const keyTable = new Map<string, Record<string, string>>(); // simula la tabla ai_api_keys
+
 const queries: Array<{ text: string; values: unknown[] }> = [];
 
 mock.module('../db', () => {
   const sql: any = (strings: TemplateStringsArray, ...values: unknown[]) => {
     const text = strings.join('?').replace(/\s+/g, ' ').trim();
     queries.push({ text, values });
+    if (text.startsWith('INSERT INTO ai_api_keys')) {
+      const [u, p, ciphertext, iv, tag] = values as string[];
+      keyTable.set(`${u}|${p}`, { ciphertext, iv, tag });
+      return Promise.resolve([]);
+    }
+    if (text.includes('FROM ai_api_keys')) {
+      const k = `${values[0]}|${values[1]}`;
+      if (text.startsWith('DELETE')) { keyTable.delete(k); return Promise.resolve([]); }
+      return Promise.resolve(keyTable.has(k) ? [keyTable.get(k)] : []);
+    }
     if (text.includes('FROM usuarios WHERE') && text.includes('id = ?')) {
       const u = USERS[values[0] as string];
       return Promise.resolve(
@@ -84,7 +97,7 @@ const gemini = Bun.serve({
 let app: Elysia;
 let hive: typeof import('./hive');
 
-const token = (id: string) => jwt.sign({ id, email: 'x@y.z' }, 'test-secret', { algorithm: 'HS256' });
+const token = (id: string) => jwt.sign({ id, email: 'x@y.z' }, process.env.JWT_SECRET!, { algorithm: 'HS256' });
 const call = (path: string, init: RequestInit & { as?: string } = {}) => {
   const { as, ...rest } = init;
   return app.handle(
@@ -143,6 +156,19 @@ describe('API key de Gemini', () => {
 
     const otro = await (await call('/ai/estado', { as: OTRO_APICULTOR })).json();
     expect(otro.data.configurada).toBe(false);
+  });
+
+  test('la clave vive en la base relacional: cifrada, y si cambia el secreto se marca como ilegible', async () => {
+    const row = [...keyTable.entries()].find(([k]) => k.startsWith(APICULTOR));
+    expect(row).toBeDefined();
+    expect(JSON.stringify(row)).not.toContain('SECRETA');
+    const original = process.env.AI_KEY_SECRET;
+    process.env.AI_KEY_SECRET = 'otro-secreto-completamente-distinto-123456';
+    const estado = await (await call('/ai/estado', { as: APICULTOR })).json();
+    process.env.AI_KEY_SECRET = original;
+    expect(estado.data.configurada).toBe(false);
+    expect(estado.data.ilegible).toBe(true);
+    expect((await (await call('/ai/estado', { as: APICULTOR })).json()).data.configurada).toBe(true);
   });
 
   test('el administrador NO hereda la clave de otro usuario y sin GEMINI_API_KEY no tiene clave', async () => {
@@ -227,6 +253,27 @@ describe('chat con los datos', () => {
     expect(res.status).toBe(200);
     expect(geminiCalls[0]!.tools).toContain('admin_metricas_plataforma');
     expect(geminiCalls[0]!.tools).not.toContain('apiario_resumen_general');
+  });
+});
+
+describe('transporte real (TCP + CORS)', () => {
+  test('el stream SSE termina limpio por un socket real', async () => {
+    const { cors } = await import('@elysiajs/cors');
+    const { default: aiRoutes } = await import('../routes/ai');
+    const server = new Elysia().use(cors({ origin: '*' })).group('/api/v1', (g) => g.use(aiRoutes)).listen(0);
+    try {
+      await call('/ai/api-key', { as: APICULTOR, method: 'PUT', body: JSON.stringify({ apiKey: 'AIzaSyAPICULTOR-SECRETA-4321' }) });
+      const res = await fetch(`http://localhost:${server.server!.port}/api/v1/ai/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token(APICULTOR)}`, Origin: 'https://app.test' },
+        body: JSON.stringify({ mensaje: 'dame un resumen' }),
+      });
+      expect(res.status).toBe(200);
+      const text = await res.text();
+      expect(text).toContain('event: done');
+    } finally {
+      server.stop(true);
+    }
   });
 });
 

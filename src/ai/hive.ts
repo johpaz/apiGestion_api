@@ -7,7 +7,6 @@ import {
   currentTenant,
   tenantKeyFromId,
   setCatalogActivation,
-  storeProviderApiKey,
   loadProviderApiKey,
   deleteProviderSecrets,
 } from '@johpaz/hive-sdk/storage';
@@ -15,6 +14,7 @@ import { agents, skills as skillsApi } from '@johpaz/hive-sdk/services';
 import { syncToolsToIndex, syncSkillsToIndex, flushTraces } from '@johpaz/hive-sdk/agent';
 import logger from '../utils/logger';
 import { ALL_TOOLS, runTool, type Audience, type ToolContext } from './tools';
+import { deleteStoredKey, loadStoredKey, saveStoredKey } from './keyStore';
 import { UI_TOOL, buildSurface, type A2uiMessage } from './a2ui';
 import { AI_MODEL, AI_PROVIDER, SKILLS, SWARMS, agentIdFor, coordinatorOf, personaIdFromAgentId, promptFor, userIdFromAgentId } from './swarm';
 
@@ -268,11 +268,30 @@ function platformKeyFor(rol: Audience): string {
   return rol === 'administrador' ? process.env.GEMINI_API_KEY?.trim() || '' : '';
 }
 
+/**
+ * La clave del usuario vive en Postgres (ver keyStore.ts). Si solo existe en la HiveDB de una versión anterior,
+ * se migra a Postgres la primera vez que se lee.
+ */
+async function readOwnKey(user: AiUser): Promise<{ apiKey: string | null; unreadable: boolean }> {
+  const stored = await loadStoredKey(user.id, AI_PROVIDER);
+  if (stored && 'apiKey' in stored) return { apiKey: stored.apiKey, unreadable: false };
+  if (stored) return { apiKey: null, unreadable: true };
+  const legacy = await inTenant(user.id, () => loadProviderApiKey(AI_PROVIDER)).catch(() => '');
+  if (legacy) {
+    await saveStoredKey(user.id, AI_PROVIDER, legacy);
+    log.info({ user: user.id }, 'API key migrada de HiveDB a Postgres');
+    return { apiKey: legacy, unreadable: false };
+  }
+  return { apiKey: null, unreadable: false };
+}
+
 export async function keyStatus(user: AiUser) {
   await ensureReady();
-  const own = await inTenant(user.id, () => loadProviderApiKey(AI_PROVIDER));
+  const { apiKey: own, unreadable } = await readOwnKey(user);
   const platform = !own && !!platformKeyFor(user.rol);
+  if (unreadable) log.error({ user: user.id }, 'API key guardada pero ilegible: cambió AI_KEY_SECRET / JWT_SECRET');
   return {
+    ilegible: unreadable,
     configurada: !!own || platform,
     origen: own ? ('propia' as const) : platform ? ('plataforma' as const) : null,
     clave: own ? maskKey(own) : null,
@@ -305,14 +324,19 @@ export async function saveApiKey(user: AiUser, rawKey: unknown) {
     throw new AiError('Google rechazó esa API key. Revísala en Google AI Studio', 'INVALID_API_KEY');
   }
   await ensureReady();
-  const persisted = await inTenant(user.id, () => storeProviderApiKey(AI_PROVIDER, apiKey));
-  if (!persisted) throw new AiError('No se pudo guardar la clave de forma segura', 'UNAVAILABLE', 503);
+  try {
+    await saveStoredKey(user.id, AI_PROVIDER, apiKey);
+  } catch (error) {
+    log.error({ err: error }, 'No se pudo guardar la API key');
+    throw new AiError('No se pudo guardar la clave de forma segura', 'UNAVAILABLE', 503);
+  }
   return keyStatus(user);
 }
 
 export async function removeApiKey(user: AiUser) {
   await ensureReady();
-  await inTenant(user.id, () => deleteProviderSecrets(AI_PROVIDER));
+  await deleteStoredKey(user.id, AI_PROVIDER);
+  await inTenant(user.id, () => deleteProviderSecrets(AI_PROVIDER)).catch(() => {}); // copia heredada, si la hay
   return keyStatus(user);
 }
 
@@ -339,7 +363,7 @@ export async function* chat(user: AiUser, message: string, conversationId: strin
   inflight.set(user.id, running + 1);
 
   try {
-    const own = await inTenant(user.id, () => loadProviderApiKey(AI_PROVIDER));
+    const own = (await readOwnKey(user)).apiKey;
     const apiKey = own || platformKeyFor(user.rol);
     if (!apiKey) {
       throw new AiError('Configura tu API key de Gemini para hablar con tus datos', 'NO_API_KEY', 402);

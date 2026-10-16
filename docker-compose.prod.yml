@@ -47,6 +47,7 @@ services:
       # Asistente de IA (Hive SDK): HiveDB vive en un volumen persistente
       HIVE_HOME: /data/hive
       HIVE_MASTER_KEY: ${HIVE_MASTER_KEY:-}
+      AI_KEY_SECRET: ${AI_KEY_SECRET:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       AI_MODEL: ${AI_MODEL:-gemini-3.8-flash}
     volumes:

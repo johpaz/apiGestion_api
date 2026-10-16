@@ -118,13 +118,15 @@ aiRoutes.post('/chat', async ({ user, body, request, set }: any) => {
     try {
       let response = '';
       let usage: unknown;
+      const superficies: unknown[] = [];
       for await (const event of events) {
+        if (event.type === 'a2ui') superficies.push(event.messages);
         if (event.type === 'done') {
           response = event.response;
           usage = event.usage;
         }
       }
-      return { success: true, data: { conversacionId: conversationId, respuesta: response, uso: usage } } as ApiResponse;
+      return { success: true, data: { conversacionId: conversationId, respuesta: response, uso: usage, superficies } } as ApiResponse;
     } catch (error) {
       return fail(set, error);
     }
