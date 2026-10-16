@@ -1,4 +1,5 @@
 import { resolve as resolvePath } from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { ensureHiveDb, closeHiveDb, col, registerAppTool, runAgent, SEED_DATA } from '@johpaz/hive-sdk';
 import type { ToolDoc } from '@johpaz/hive-sdk';
 import {
@@ -15,7 +16,7 @@ import { syncToolsToIndex, syncSkillsToIndex, flushTraces } from '@johpaz/hive-s
 import logger from '../utils/logger';
 import { ALL_TOOLS, runTool, type Audience, type ToolContext } from './tools';
 import { UI_TOOL, buildSurface, type A2uiMessage } from './a2ui';
-import { AI_MODEL, AI_PROVIDER, SKILLS, SWARMS, coordinatorOf } from './swarm';
+import { AI_MODEL, AI_PROVIDER, SKILLS, SWARMS, agentIdFor, coordinatorOf, personaIdFromAgentId, promptFor, userIdFromAgentId } from './swarm';
 
 /**
  * Integración con Hive SDK.
@@ -58,15 +59,30 @@ const provisioned = state.provisioned;
 /** tenant → usuario: los workers delegados corren sin `user_id`, pero sí dentro del inquilino. */
 const userByTenant = new Map<string, string>();
 
+/** Segundo canal (propio) para el usuario del turno: no depende de que el SDK propague `user_id`. */
+const turnUser = new AsyncLocalStorage<string>();
+
 const inTenant = <T>(userId: string, fn: () => Promise<T>) => {
   const key = tenantKeyFromId(userId);
   userByTenant.set(key, userId);
-  return runInTenant(key, fn);
+  return turnUser.run(userId, () => runInTenant(key, fn));
 };
 
-// ─── Arranque ───────────────────────────────────────────────────────────────
+/**
+ * Quién llama a la herramienta. La vía principal es el `agent_id` que el SDK entrega SIEMPRE a la herramienta
+ * (incluidos los workers delegados) y que lleva el id del usuario dueño. Se contrasta con el inquilino activo
+ * cuando existe; si discrepan, no se adivina. Respaldos: contexto propio del turno, inquilino y `user_id`.
+ */
+function callerOf(config: any): string | undefined {
+  const fromAgent = userIdFromAgentId(config?.configurable?.agent_id);
+  const tenant = currentTenant();
+  const fromTenant = tenant ? userByTenant.get(tenant) : undefined;
+  const user = fromAgent ?? turnUser.getStore() ?? fromTenant ?? (config?.configurable?.user_id || undefined);
+  if (user && tenant && tenantKeyFromId(user) !== tenant) return undefined; // otro inquilino: nunca se mezcla
+  return user;
+}
 
-/** Ejecutor que ve el agente: reconstruye el contexto desde el usuario que corre el turno. */
+/** Ejecutor que ve el agente: reconstruye el contexto desde el usuario dueño del agente que llama. */
 function toRuntimeTool(def: (typeof ALL_TOOLS)[number]) {
   return {
     name: def.name,
@@ -77,14 +93,12 @@ function toRuntimeTool(def: (typeof ALL_TOOLS)[number]) {
       required: def.parameters.required ?? [],
     },
     execute: async (args: Record<string, unknown>, config?: any) => {
-      // El inquilino activo es la fuente de verdad; `user_id` (si viene) debe coincidir con él.
-      const tenant = currentTenant();
-      const tenantUser = tenant ? userByTenant.get(tenant) : undefined;
-      const declared: string | undefined = config?.configurable?.user_id || undefined;
-      const userId = tenantUser ?? declared;
-      if (tenantUser && declared && declared !== tenantUser) return { error: 'Sesión de usuario inconsistente' };
+      const userId = callerOf(config);
       const ctx = userId ? await resolveContext(userId) : null;
-      if (!ctx) return { error: 'Sesión de usuario no disponible para esta consulta' };
+      if (!ctx) {
+        log.warn({ tool: def.name, tenant: currentTenant(), declared: config?.configurable?.user_id, hasTurnUser: !!turnUser.getStore(), agent: config?.configurable?.agent_id }, 'Herramienta sin contexto de usuario');
+        return { error: 'Sesión de usuario no disponible para esta consulta. Si delegaste con mode="async", repite la delegación con mode="sync"' };
+      }
       return (await runTool(ctx, def.name, args)) as object;
     },
   };
@@ -204,10 +218,11 @@ export async function provisionSwarm(user: AiUser): Promise<void> {
     // Especialistas primero: el coordinador los delega por id.
     const personas = [...SWARMS[user.rol]].sort((a, b) => (a.role === b.role ? 0 : a.role === 'worker' ? -1 : 1));
     for (const p of personas) {
+      const id = agentIdFor(p.id, user.id);
       const spec = {
         name: p.name,
         description: p.description,
-        systemPrompt: p.systemPrompt,
+        systemPrompt: promptFor(p, user.rol, user.id),
         role: p.role,
         providerId: AI_PROVIDER,
         modelId: AI_MODEL,
@@ -217,8 +232,9 @@ export async function provisionSwarm(user: AiUser): Promise<void> {
         thinking: 'auto' as const,
         userId: user.id,
       };
-      if (await agents.getAgent(p.id)) await agents.updateAgent(p.id, spec);
-      else await agents.createAgent({ id: p.id, ...spec });
+      if (await agents.getAgent(id)) await agents.updateAgent(id, spec);
+      else await agents.createAgent({ id, ...spec });
+      await agents.deleteAgent(p.id).catch(() => {}); // versión anterior, sin id de usuario
     }
   });
 
@@ -228,11 +244,11 @@ export async function provisionSwarm(user: AiUser): Promise<void> {
 export async function listSwarm(user: AiUser) {
   await provisionSwarm(user);
   return inTenant(user.id, async () => {
-    const mine = new Set(SWARMS[user.rol].map((p) => p.id));
+    const mine = new Set(SWARMS[user.rol].map((p) => agentIdFor(p.id, user.id)));
     return (await agents.listAgents())
       .filter((a) => mine.has(a.id))
       .map((a) => ({
-        id: a.id,
+        id: personaIdFromAgentId(a.id),
         nombre: a.name,
         descripcion: a.description,
         rol: a.role,
@@ -348,7 +364,7 @@ export async function* chat(user: AiUser, message: string, conversationId: strin
       let last = '';
       let usage: any;
       for await (const chunk of runAgent({
-        agentId: coordinator.id,
+        agentId: agentIdFor(coordinator.id, user.id),
         userMessage: message,
         threadId: `${user.id}-${conversationId}`,
         channel: 'web',

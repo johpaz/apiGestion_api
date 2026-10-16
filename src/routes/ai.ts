@@ -144,6 +144,10 @@ aiRoutes.post('/chat', async ({ user, body, request, set }: any) => {
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const send = (event: string, data: unknown) => controller.enqueue(encoder.encode(sse(event, data)));
+      // Comentario SSE periódico: evita que Traefik/HTTP2 corte el stream por inactividad mientras Gemini piensa.
+      const heartbeat = setInterval(() => {
+        try { controller.enqueue(encoder.encode(': keep-alive\n\n')); } catch { /* stream ya cerrado */ }
+      }, 10_000);
       try {
         send('inicio', { conversacionId: conversationId });
         let current = first;
@@ -155,7 +159,8 @@ aiRoutes.post('/chat', async ({ user, body, request, set }: any) => {
       } catch (error) {
         send('error', { error: error instanceof AiError ? error.message : 'El asistente no pudo responder', codigo: error instanceof AiError ? error.code : 'UNAVAILABLE' });
       } finally {
-        controller.close();
+        clearInterval(heartbeat);
+        try { controller.close(); } catch { /* ya cancelado */ }
       }
     },
     cancel() {
@@ -167,7 +172,6 @@ aiRoutes.post('/chat', async ({ user, body, request, set }: any) => {
     headers: {
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-cache, no-transform',
-      Connection: 'keep-alive',
       'X-Accel-Buffering': 'no',
     },
   });

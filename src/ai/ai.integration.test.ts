@@ -67,7 +67,7 @@ const gemini = Bun.serve({
     } else if (tools.includes('ui_mostrar') && asked.includes('grafica')) {
       parts = [{ functionCall: { name: 'ui_mostrar', args: { titulo: 'Prod', bloques: [{ tipo: 'grafica', etiquetas: ['Ene'], series: [{ nombre: 'Miel', valores: [3] }] }] } } }];
     } else if (tools.includes('task_delegate') && asked.includes('campo')) {
-      parts = [{ functionCall: { name: 'task_delegate', args: { worker_id: 'campo_apicola', task_description: 'lista los apiarios', mode: 'sync' } } }];
+      parts = [{ functionCall: { name: 'task_delegate', args: { worker_id: JSON.stringify(body.systemInstruction ?? body).match(/campo_apicola__[a-f0-9]+/)?.[0] ?? 'campo_apicola', task_description: 'lista los apiarios', mode: 'sync' } } }];
     } else if (tools.includes('apiario_listar') && !tools.includes('task_delegate')) {
       parts = [{ functionCall: { name: 'apiario_listar', args: { limite: 5 } } }];
     } else if (tools.includes('apiario_resumen_general')) {
@@ -175,6 +175,7 @@ describe('chat con los datos', () => {
     const res = await call('/ai/chat', { as: APICULTOR, method: 'POST', body: JSON.stringify({ mensaje: 'dame un resumen', conversacionId: 'conv-abcdef01' }) });
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('text/event-stream');
+    expect(res.headers.get('connection')).toBeNull(); // prohibida en HTTP/2 (Traefik la rechaza)
     const text = await res.text();
     expect(text).toContain('event: inicio');
     expect(text).toContain('event: step');

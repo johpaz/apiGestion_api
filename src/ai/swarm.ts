@@ -265,3 +265,31 @@ export const SWARMS: Record<Audience, Persona[]> = {
 
 export const coordinatorOf = (rol: Audience): Persona =>
   SWARMS[rol].find((p) => p.role === 'coordinator')!;
+
+// ─── Identidad del agente = identidad del usuario ───────────────────────────
+// El SDK entrega siempre `agent_id` a las herramientas, también a los workers delegados (a los que no
+// llega `user_id` ni garantiza el contexto asíncrono). Por eso el id de cada agente lleva el id del
+// usuario dueño: `campo_apicola__<userId>`. Lo fija el servidor al provisionar; el modelo no puede cambiarlo.
+
+const SEP = '__';
+
+export const agentIdFor = (personaId: string, userId: string) => `${personaId}${SEP}${userId}`;
+
+export function userIdFromAgentId(agentId: unknown): string | undefined {
+  if (typeof agentId !== 'string') return undefined;
+  const i = agentId.lastIndexOf(SEP);
+  return i > 0 ? agentId.slice(i + SEP.length) || undefined : undefined;
+}
+
+export const personaIdFromAgentId = (agentId: string) => {
+  const i = agentId.lastIndexOf(SEP);
+  return i > 0 ? agentId.slice(0, i) : agentId;
+};
+
+/** Prompt de la persona con los ids de sus compañeros ya referidos a los agentes de ESTE usuario. */
+export function promptFor(persona: Persona, rol: Audience, userId: string): string {
+  return SWARMS[rol].reduce(
+    (text, p) => text.replace(new RegExp(`\\b${p.id}\\b`, 'g'), agentIdFor(p.id, userId)),
+    persona.systemPrompt,
+  );
+}
