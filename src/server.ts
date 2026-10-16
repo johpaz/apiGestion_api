@@ -1,6 +1,5 @@
 import { Elysia } from 'elysia';
 import { cors } from '@elysiajs/cors';
-import { jwt } from '@elysiajs/jwt';
 import logger from './utils/logger';
 import { errorHandler } from './middleware/errorHandler';
 
@@ -82,10 +81,6 @@ const app = new Elysia()
       'user-agent': request.headers.get('user-agent')
     });
   })
-  .use(jwt({
-    name: 'jwt',
-    secret: process.env.JWT_SECRET || 'fallback-secret'
-  }))
   // Health check endpoint
   .get('/health', () => ({
     success: true,

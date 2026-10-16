@@ -71,11 +71,11 @@ export const authenticateToken = async ({ headers }: { headers: Record<string, s
   }
 };
 
-export const authGuard = new Elysia().derive({ as: 'global' }, async ({ headers }) => ({
+export const authGuard = new Elysia().derive('global', async ({ headers }) => ({
   user: await authenticateToken({ headers }),
 }));
 
 export const requireRoleGuard = (roles: AuthUser['rol'][]) => new Elysia()
-  .derive({ as: 'global' }, async (context) => ({
+  .derive('global', async (context) => ({
     user: await requireRole(roles)((context as unknown as { user: AuthUser }).user),
   }));

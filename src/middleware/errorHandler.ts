@@ -1,11 +1,11 @@
-import { Elysia } from 'elysia';
+import { Elysia, NotFound } from 'elysia';
 import { ApiResponse } from '../types/apicola';
 import logger from '../utils/logger';
 import { AuthenticationError, AuthorizationError } from './authorization';
 
 // Plugin de manejo de errores para Elysia
 export const errorHandler = new Elysia()
-  .onError({ as: 'global' }, ({ code, error, set }) => {
+  .onError('global', ({ error, set }) => {
     logger.error(`Error: ${error}`);
 
     // Default error
@@ -52,7 +52,7 @@ export const errorHandler = new Elysia()
     }
 
     // Not found errors
-    if (code === 'NOT_FOUND') {
+    if (error instanceof NotFound) {
       set.status = 404;
       errorResponse.error = 'Ruta no encontrada';
     }
