@@ -13,3 +13,7 @@ Incluye cuatro apiarios, 32 colmenas, ocho núcleos con donantes, conversión y 
 El script utiliza una transacción para los registros de PostgreSQL, no borra datos y rechaza bases remotas o entornos de producción. La cuenta de Firebase se crea antes de esa transacción; si falla la carga, corrige el error y vuelve a ejecutar el comando con la misma contraseña.
 
 Para recorrer el panel administrativo, usa tu cuenta de administrador existente: sus indicadores globales también incluyen los datos demo.
+
+### Vista pública `/demo`
+
+Desde `Api/`, ejecuta `bun db/export-demo.ts` para actualizar `front/src/data/demo-snapshot.json` después de modificar la cuenta demo. La exportación incluye únicamente campos operativos de la cuenta ficticia `demo-visual-apicolmena-v1`, sin credenciales, contactos ni identificadores de usuario. La página indica la fecha de corte y funciona sin sesión ni conexión al backend.
